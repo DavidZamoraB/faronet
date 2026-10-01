@@ -1,0 +1,31 @@
+# Secretos y llaves (nunca al repositorio)
+.env
+.env.*
+*.key
+*.pem
+.dev.vars
+secrets/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Node / Worker
+node_modules/
+.wrangler/
+dist/
+
+# Arduino / PlatformIO
+.pio/
+build/
+
+# KiCad
+*-backups/
+*.kicad_prl
+fp-info-cache
+
+# Sistema / editor
+.DS_Store
+.vscode/
