@@ -23,3 +23,9 @@ Red de comunicación por luz con una mesh anónima y una aplicación pública en
 - `main` siempre estable y compilable.
 - Una rama por funcionalidad (`feature/<tema>`), integrada por pull request revisado por el otro integrante.
 - No se suben secretos ni llaves; los del Worker se cargan con `wrangler secret`.
+
+## Integración continua
+
+Cada pull request corre `.github/workflows/ci.yml`: las pruebas de `adaptador/`
+(incluidas las del núcleo del firmware en C++) y la compilación del firmware
+para Arduino Nano y Uno.

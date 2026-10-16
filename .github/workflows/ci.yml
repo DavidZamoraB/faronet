@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  adaptador:
+    name: Pruebas de la biblioteca (Python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Instalar dependencias
+        run: pip install pyserial scapy
+      - name: Pruebas (incluye las del nucleo del firmware en C++)
+        working-directory: adaptador
+        run: python -m unittest -v
+
+  firmware:
+    name: Compilar firmware (${{ matrix.placa }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        placa: [arduino:avr:nano, arduino:avr:uno]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: arduino/setup-arduino-cli@v2
+      - name: Instalar core AVR
+        run: |
+          arduino-cli core update-index
+          arduino-cli core install arduino:avr
+      - name: Compilar
+        run: arduino-cli compile --fqbn ${{ matrix.placa }} --warnings all firmware/faro

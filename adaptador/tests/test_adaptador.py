@@ -187,6 +187,19 @@ class TestMedicion(unittest.TestCase):
             b.cerrar()
 
 
+class TestScapy(unittest.TestCase):
+    def test_trama_scapy_compatible(self):
+        try:
+            from dispositivo_luz_adaptador.scapy_faro import FaroTrama
+        except ImportError:
+            self.skipTest("scapy no esta instalado")
+        crudo = bytes(FaroTrama(dst=DIFUSION, src=b"\x01\x02\x03\x04", seq=7,
+                                banderas=1, carga=b"hola"))
+        esperado = Trama(destino=DIFUSION, origen=b"\x01\x02\x03\x04", carga=b"hola",
+                         pide_ack=True, seq=7).a_bytes()
+        self.assertEqual(crudo, esperado)
+
+
 class TestFirmwareCore(unittest.TestCase):
     """Compila y corre las pruebas en C++ del firmware si hay g++."""
 
