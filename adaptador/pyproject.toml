@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dispositivo-luz-adaptador"
+version = "1.0.0"
+description = "Comunicacion entre el nodo FaroNet y el Faro (Capa 1 por luz)"
+requires-python = ">=3.9"
+dependencies = ["pyserial>=3.5"]
+
+[project.optional-dependencies]
+scapy = ["scapy>=2.5"]
+
+[project.scripts]
+faro = "dispositivo_luz_adaptador.cli:main"
+
+[tool.setuptools]
+packages = ["dispositivo_luz_adaptador"]
