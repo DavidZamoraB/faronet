@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "faronet-gateway"
+version = "0.1.0"
+description = "Gateway FaroNet: cliente firmado del Worker en el edge"
+requires-python = ">=3.10"
+dependencies = ["faronet", "pynacl>=1.5"]
+
+[project.scripts]
+faronet-edge = "faronet_gateway.cli:main"
+
+[tool.setuptools]
+packages = ["faronet_gateway"]
