@@ -1,0 +1,16 @@
+{
+  "name": "faronet-worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Capa 7 publica de FaroNet en Cloudflare Workers",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261016.1",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.151.1"
+  }
+}
