@@ -27,5 +27,5 @@ Red de comunicación por luz con una mesh anónima y una aplicación pública en
 ## Integración continua
 
 Cada pull request corre `.github/workflows/ci.yml`: las pruebas de `adaptador/`
-(incluidas las del núcleo del firmware en C++) y la compilación del firmware
-para Arduino Nano y Uno.
+(incluidas las del núcleo del firmware en C++), las de la mesh en `nodo/` y la
+compilación del firmware para Arduino Nano y Uno.

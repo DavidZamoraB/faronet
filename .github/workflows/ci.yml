@@ -20,6 +20,20 @@ jobs:
         working-directory: adaptador
         run: python -m unittest -v
 
+  nodo:
+    name: Pruebas de la mesh (Python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Instalar dependencias
+        run: pip install ./adaptador ./nodo
+      - name: Pruebas
+        working-directory: nodo
+        run: python -m unittest -v
+
   firmware:
     name: Compilar firmware (${{ matrix.placa }})
     runs-on: ubuntu-latest
