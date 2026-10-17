@@ -44,10 +44,17 @@ EXTENDIDO = 0x02  # salto p -> cliente: respuesta del handshake (64)
 ENTREGAR = 0x03   # cliente -> salida: destino(8) | sobre(SOBRE)
 ENTREGADO = 0x04  # salida -> cliente: estado(1)
 ERROR = 0x05      # salto p -> cliente: codigo(1)
+PUBLICAR = 0x06   # cliente -> salida (gateway): mensaje publico (mensaje.MensajePublico)
+PUBLICADO = 0x07  # salida -> cliente: estado(1)
 
 # Estados de ENTREGADO
 ENTREGA_OK = 0
 ENTREGA_SIN_RUTA = 1
+
+# Estados de PUBLICADO
+PUBLICADO_OK = 0
+PUBLICADO_NO_GATEWAY = 1   # la salida no es un gateway conectado al edge
+PUBLICADO_FALLO = 2        # el edge rechazo el mensaje o no respondio
 
 # El sobre (mensaje de extremo a extremo) mide siempre lo mismo, calculado
 # para el circuito mas largo permitido.

@@ -20,12 +20,15 @@ faronet --llave ana.key --nombre ana --escuchar 0.0.0.0:9101 --vecino 192.168.1.
 # Gateway con un Faro: la identidad vive en la EEPROM del Faro y el botón de pánico la borra
 faronet --faro /dev/ttyUSB0 --nombre gw-norte --gateway --escuchar 0.0.0.0:9101
 
+# Gateway conectado al Worker: publica los mensajes publicos y sube el directorio
+faronet --llave gw.key --nombre gw-norte --gateway --edge https://faronet.<cuenta>.workers.dev --escuchar 0.0.0.0:9101
+
 # Rele sin consola (servicio)
 faronet --llave rele.key --escuchar 0.0.0.0:9101 --vecino 10.0.0.5:9101 --sin-consola
 ```
 
-Consola: `nodos`, `rutas`, `circuitos`, `enviar <nombre|id> <texto>`, `buzon`,
-`panico`, `salir`. Ver `faronet --help` para todos los parámetros.
+Consola: `nodos`, `rutas`, `circuitos`, `enviar <nombre|id> <texto>`,
+`publicar <tema> <texto>`, `buzon`, `panico`, `salir`. Ver `faronet --help` para todos los parámetros.
 
 Demo local con 5 reles en línea: `./demo_local.sh` (ver el comentario del script).
 
@@ -57,6 +60,10 @@ Demo local con 5 reles en línea: `./demo_local.sh` (ver el comentario del scrip
 * **Ruteo dinámico**: vector de distancias con horizonte dividido y
   envenenamiento en reversa, actualizaciones inmediatas y expiración. Costo
   del enlace: TCP 1, Faro 4.
+* **Mensajes públicos** (`publicar`): el circuito termina en un **gateway**
+  (rol en el directorio). El gateway recibe el `MensajePublico` (tamaño fijo,
+  391 B) como salida del circuito y lo sube al Worker (`gateway/`), sin saber
+  quién lo originó.
 * **Sin registros**: nada se escribe a disco salvo la llave (si se usa
   `--llave`). No se guardan IPs de vecinos ni direcciones físicas.
 
@@ -71,7 +78,6 @@ red que cruza dos Faros simulados (`dispositivo_luz_adaptador.simulador`).
 
 ## Pendiente
 
-* Mensajes públicos hacia el gateway / Worker (comando de rele `PUBLICAR`).
 * Autenticar el `HOLA` de los enlaces (hoy un vecino puede mentir sobre su
   ID; no rompe el anonimato porque el handshake autentica a cada salto, pero
   puede desviar rutas).

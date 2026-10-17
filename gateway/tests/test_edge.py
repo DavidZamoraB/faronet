@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import shutil
+import signal
 import socket
 import subprocess
 import tempfile
@@ -18,7 +19,10 @@ from pathlib import Path
 
 from faronet.cripto import Identidad
 from faronet.directorio import ROL_GATEWAY, ROL_RELE, Entrada
+from faronet.enlaces import EnlaceMemoria
+from faronet.nodo import Nodo
 from faronet_gateway import edge
+from faronet_gateway.puente import Puente
 
 WORKER = Path(__file__).resolve().parents[2] / "worker"
 
@@ -42,7 +46,7 @@ class TestWorker(unittest.TestCase):
             ["npx", "wrangler", "dev", "--port", str(cls.puerto), "--ip", "127.0.0.1",
              "--persist-to", cls.estado, "--var", f"GATEWAYS:{cls.gateway.llave_firma.hex()}",
              "--show-interactive-dev-session=false"],
-            cwd=WORKER, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            cwd=WORKER, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
             env={**os.environ, "WRANGLER_SEND_METRICS": "false", "CI": "1"})
         limite = time.monotonic() + 90
         while time.monotonic() < limite:
@@ -59,11 +63,13 @@ class TestWorker(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        cls.proceso.terminate()
+        # wrangler arranca procesos hijos (workerd, esbuild): se termina el grupo entero.
+        grupo = os.getpgid(cls.proceso.pid)
+        os.killpg(grupo, signal.SIGTERM)
         try:
             cls.proceso.wait(timeout=10)
         except subprocess.TimeoutExpired:
-            cls.proceso.kill()
+            os.killpg(grupo, signal.SIGKILL)
         shutil.rmtree(cls.estado, ignore_errors=True)
 
     # ---- gateway autenticado ----
@@ -157,6 +163,36 @@ class TestWorker(unittest.TestCase):
         salida, _ = oyente.communicate(timeout=20)
         self.assertIn("historial:", salida)
         self.assertIn("mensaje:en vivo!", salida)
+
+    # ---- de punta a punta: mesh -> gateway -> Worker ----
+    def test_mesh_publica_en_el_edge(self):
+        # 0 - 1 - 2 - 3 - gateway (con la llave autorizada en GATEWAYS)
+        nodos = [Nodo(Identidad.nueva(), nombre=f"m{i}", intervalo_rutas=0.3, timeout=10).iniciar()
+                 for i in range(4)]
+        gw = Nodo(self.gateway, nombre="gw", roles=ROL_RELE | ROL_GATEWAY,
+                  intervalo_rutas=0.3, timeout=10).iniciar()
+        nodos.append(gw)
+        for a, b in zip(nodos, nodos[1:]):
+            x, y = EnlaceMemoria.par()
+            a.agregar_enlace(x)
+            b.agregar_enlace(y)
+        puente = Puente(gw, self.url, primera_sincronizacion=3600)
+        try:
+            limite = time.monotonic() + 10
+            while time.monotonic() < limite and not all(
+                    len(n.directorio.entradas()) == 5 and
+                    all(n.rutas.siguiente(o.id) for o in nodos if o is not n) for n in nodos):
+                time.sleep(0.05)
+            nodos[0].publicar("mesh", "salio de FaroNet por 3 saltos", alias="anon")
+            ultimo = self.cliente.mensajes("mesh")[-1]
+            self.assertEqual((ultimo["texto"], ultimo["alias"]), ("salio de FaroNet por 3 saltos", "anon"))
+            self.assertEqual(puente.sincronizar_directorio(), 5)
+            publicos = {e["id"] for e in self.cliente.directorio()}
+            self.assertTrue({n.id.hex() for n in nodos} <= publicos)
+        finally:
+            puente.detener()
+            for n in nodos:
+                n.detener()
 
     def test_pagina_sala_con_csp(self):
         with urllib.request.urlopen(self.url + "/salas/pruebas") as r:

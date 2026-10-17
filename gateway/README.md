@@ -1,7 +1,12 @@
 # gateway
 
-Puente entre FaroNet y el edge (Raspberry Pi). Por ahora contiene el cliente
-firmado del Worker (`faronet_gateway/edge.py`) y su CLI `faronet-edge`.
+Puente entre FaroNet y el edge (Raspberry Pi):
+
+* `faronet_gateway/puente.py`: se engancha al nodo gateway. Sube al Worker los
+  mensajes públicos que llegan por la mesh (comando de relé `PUBLICAR`) y, cada
+  5 minutos, el directorio de nodos. Se activa con `faronet --gateway --edge URL`.
+* `faronet_gateway/edge.py`: cliente firmado del Worker y buzón muerto cifrado,
+  con su CLI `faronet-edge`.
 
 ```bash
 pip install -e adaptador -e nodo -e gateway      # desde la raíz, en el venv
@@ -23,8 +28,4 @@ quien tenga el secreto.
 Pruebas: `cd gateway && python -m unittest -v` (levanta `wrangler dev` si está
 instalado `worker/node_modules`).
 
-## Pendiente
-
-* Comando de relé `PUBLICAR` en la mesh: la salida del circuito entrega el
-  mensaje público al gateway, y el gateway lo sube con `ClienteEdge.publicar`.
-* Subir el directorio de la mesh al Worker periódicamente.
+Cadena completa: `nodo --circuito onion--> gateway --HTTPS firmado--> Worker --WebSocket--> navegador`.
