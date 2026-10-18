@@ -26,9 +26,9 @@ from . import celda as C
 from . import onion as O
 from .celda import Celda, ErrorCelda, ID_LEN, SIN_ID
 from .cripto import CapaOnion, ErrorCripto, HandshakeCliente, Identidad, handshake_rele
-from .directorio import ROL_RELE, Directorio, Entrada, VIGENCIA
+from .directorio import ROL_GATEWAY, ROL_RELE, Directorio, Entrada, VIGENCIA
 from .enlaces import Enlace
-from .mensaje import Buzon, ErrorMensaje, Mensaje
+from .mensaje import Buzon, ErrorMensaje, Mensaje, MensajePublico
 from .ruteo import TablaRutas, codificar_anuncios, decodificar_anuncios
 
 INACTIVIDAD_TRAMO = 10 * 60  # un circuito sin trafico se olvida a los 10 min
@@ -83,6 +83,8 @@ class Nodo:
         self.buzon = Buzon()
         self.enlaces: list[Enlace] = []
         self.al_mensaje: list[Callable[[Mensaje], None]] = []
+        # En un gateway: sube un mensaje publico al edge. True si se publico.
+        self.al_publicar: Optional[Callable[[MensajePublico], bool]] = None
         self._lock = threading.RLock()
         self._por_anterior: dict[tuple[bytes, int], Tramo] = {}
         self._por_siguiente: dict[tuple[bytes, int], Tramo] = {}
@@ -320,6 +322,23 @@ class Nodo:
             ok = self.enviar_celda(Celda(C.ENTREGA, destino=datos[:ID_LEN], cuerpo=datos[ID_LEN:]))
             self._responder(tramo, O.ENTREGADO,
                             bytes([O.ENTREGA_OK if ok else O.ENTREGA_SIN_RUTA]))
+        elif comando == O.PUBLICAR:
+            if tramo.siguiente is not None:
+                raise O.ErrorOnion("PUBLICAR solo se acepta en la salida del circuito")
+            mensaje = MensajePublico.desde_bytes(datos)
+            publicar = self.al_publicar
+            if publicar is None or not self.roles & ROL_GATEWAY:
+                self._responder(tramo, O.PUBLICADO, bytes([O.PUBLICADO_NO_GATEWAY]))
+                return
+            # Subir al edge es lento (HTTPS): no se bloquea el hilo del enlace.
+            def subir():
+                try:
+                    ok = publicar(mensaje)
+                except Exception:
+                    ok = False
+                self._responder(tramo, O.PUBLICADO,
+                                bytes([O.PUBLICADO_OK if ok else O.PUBLICADO_FALLO]))
+            threading.Thread(target=subir, name="publicar-edge", daemon=True).start()
 
     def _creada(self, celda: Celda) -> None:
         clave = (celda.origen, celda.circuito)
@@ -388,17 +407,18 @@ class Nodo:
     # ------------------------------------------------------------------ #
     # Cliente
     # ------------------------------------------------------------------ #
-    def elegir_saltos(self, evitar: tuple[bytes, ...] = ()) -> list[Entrada]:
+    def elegir_saltos(self, evitar: tuple[bytes, ...] = (), cantidad: int | None = None) -> list[Entrada]:
         """Reles al azar del directorio. El primero debe ser alcanzable."""
+        cantidad = cantidad or self.saltos
         candidatos = [e for e in self.directorio.entradas()
                       if e.es(ROL_RELE) and e.id != self.id and e.id not in evitar]
         alcanzables = [e for e in candidatos if self.rutas.siguiente(e.id) is not None]
-        if len(candidatos) < self.saltos or not alcanzables:
-            raise ErrorNodo(f"se necesitan al menos {self.saltos} reles conocidos y alcanzables "
+        if len(candidatos) < cantidad or not alcanzables:
+            raise ErrorNodo(f"se necesitan al menos {cantidad} reles conocidos y alcanzables "
                             f"(hay {len(candidatos)})")
         primero = random.SystemRandom().choice(alcanzables)
         resto = [e for e in candidatos if e.id != primero.id]
-        return [primero] + random.SystemRandom().sample(resto, self.saltos - 1)
+        return [primero] + random.SystemRandom().sample(resto, cantidad - 1)
 
     def construir_circuito(self, saltos: list[Entrada] | None = None) -> Circuito:
         saltos = saltos or self.elegir_saltos()
@@ -467,6 +487,30 @@ class Nodo:
                 raise ErrorNodo("respuesta inesperada de la salida")
             if datos[:1] != bytes([O.ENTREGA_OK]):
                 raise ErrorNodo("la salida no tiene ruta hacia el destino")
+        finally:
+            self.cerrar_circuito(circuito)
+
+    def publicar(self, tema: str, texto: str, alias: str = "") -> None:
+        """Publica en una sala publica (clearnet) a traves de un gateway.
+
+        El gateway es el ultimo salto del circuito: conoce el mensaje, que de
+        todos modos sera publico, pero no quien lo origino."""
+        datos = MensajePublico(tema, texto, alias).a_bytes()
+        gateways = [e for e in self.directorio.entradas() if e.es(ROL_GATEWAY) and e.id != self.id]
+        if not gateways:
+            raise ErrorNodo("no hay ningun gateway en el directorio")
+        gateway = random.SystemRandom().choice(gateways)
+        reles = self.elegir_saltos(evitar=(gateway.id,), cantidad=self.saltos - 1)
+        circuito = self.construir_circuito(reles + [gateway])
+        try:
+            self._enviar_rele(circuito, O.PUBLICAR, datos)
+            origen, comando, estado = self._esperar(circuito)
+            if comando != O.PUBLICADO or origen != len(circuito.saltos):
+                raise ErrorNodo("respuesta inesperada del gateway")
+            if estado[:1] == bytes([O.PUBLICADO_NO_GATEWAY]):
+                raise ErrorNodo("ese gateway no esta conectado al edge")
+            if estado[:1] != bytes([O.PUBLICADO_OK]):
+                raise ErrorNodo("el edge no acepto el mensaje")
         finally:
             self.cerrar_circuito(circuito)
 

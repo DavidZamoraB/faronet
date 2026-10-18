@@ -10,9 +10,9 @@ from faronet import celda as C
 from faronet import onion as O
 from faronet.celda import CELDA, CUERPO, Celda, ErrorCelda
 from faronet.cripto import ErrorCripto, HandshakeCliente, Identidad, handshake_rele
-from faronet.directorio import ROL_RELE, Directorio, Entrada, ErrorDirectorio
+from faronet.directorio import ROL_GATEWAY, ROL_RELE, Directorio, Entrada, ErrorDirectorio
 from faronet.enlaces import EnlaceMemoria, EnlaceTCP, ServidorTCP
-from faronet.mensaje import Buzon, Mensaje, MAX_TEXTO
+from faronet.mensaje import Buzon, ErrorMensaje, Mensaje, MensajePublico, MAX_TEXTO, PUBLICO
 from faronet.nodo import ErrorNodo, Nodo
 from faronet.ruteo import INFINITO, TablaRutas, codificar_anuncios, decodificar_anuncios
 
@@ -170,8 +170,10 @@ class TestRuteo(unittest.TestCase):
         self.assertIsNone(t.siguiente(d))
 
 
-def armar_red(n, aristas, **kw):
-    nodos = [Nodo(Identidad.nueva(), nombre=f"n{i}", intervalo_rutas=0.3, timeout=5, **kw).iniciar()
+def armar_red(n, aristas, roles=None, identidades=None, **kw):
+    roles, identidades = roles or {}, identidades or {}
+    nodos = [Nodo(identidades.get(i) or Identidad.nueva(), nombre=f"n{i}",
+                  roles=roles.get(i, ROL_RELE), intervalo_rutas=0.3, timeout=5, **kw).iniciar()
              for i in range(n)]
     for i, j in aristas:
         a, b = EnlaceMemoria.par()
@@ -235,6 +237,59 @@ class TestRed(unittest.TestCase):
         self.assertEqual(n.directorio.entradas(), [])
         self.assertEqual(n.buzon.mensajes(), [])
         self.assertEqual(n.identidad.semilla, bytes(32))
+
+
+class TestMensajePublico(unittest.TestCase):
+    def test_tamano_fijo_y_validacion(self):
+        corto = MensajePublico("general", "hola").a_bytes()
+        largo = MensajePublico("general", "x" * 300, "anon").a_bytes()
+        self.assertEqual((len(corto), len(largo)), (PUBLICO, PUBLICO))
+        self.assertEqual(MensajePublico.desde_bytes(largo).texto, "x" * 300)
+        for malo in (MensajePublico("Mayus", "x"), MensajePublico("general", "  "),
+                     MensajePublico("general", "x" * 501)):
+            with self.assertRaises(ErrorMensaje):
+                malo.a_bytes()
+
+
+class TestPublicar(unittest.TestCase):
+    def setUp(self):
+        #   0 - 1 - 2 - 3 - 4(gateway)
+        self.nodos = armar_red(5, [(0, 1), (1, 2), (2, 3), (3, 4)], roles={4: ROL_RELE | ROL_GATEWAY})
+        self.assertTrue(esperar(lambda: convergio(self.nodos), 10))
+        self.gateway = self.nodos[4]
+        self.publicados = []
+
+        def subir(m):
+            self.publicados.append(m)
+            return True
+        self.gateway.al_publicar = subir
+
+    def tearDown(self):
+        for n in self.nodos:
+            n.detener()
+
+    def test_mensaje_publico_llega_al_gateway_sin_origen(self):
+        vistos = []
+        original = self.gateway._mensaje_de_rele
+
+        def espiar(tramo, comando, datos):
+            vistos.append(tramo.anterior)
+            original(tramo, comando, datos)
+        self.gateway._mensaje_de_rele = espiar
+        self.nodos[0].publicar("general", "hola clearnet", alias="anon")
+        self.assertEqual([(m.tema, m.texto, m.alias) for m in self.publicados],
+                         [("general", "hola clearnet", "anon")])
+        self.assertNotIn(self.nodos[0].id, vistos)  # el gateway no ve al origen
+
+    def test_gateway_sin_edge(self):
+        self.gateway.al_publicar = None
+        with self.assertRaises(ErrorNodo):
+            self.nodos[0].publicar("general", "no hay edge")
+
+    def test_edge_rechaza(self):
+        self.gateway.al_publicar = lambda m: False
+        with self.assertRaises(ErrorNodo):
+            self.nodos[0].publicar("general", "rechazado")
 
 
 class TestTCP(unittest.TestCase):

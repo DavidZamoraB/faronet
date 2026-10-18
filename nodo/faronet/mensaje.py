@@ -14,12 +14,13 @@ ninguna identidad del remitente.
 """
 from __future__ import annotations
 
+import re
 import struct
 import time
 from dataclasses import dataclass, field
 
 from .cripto import Identidad, cerrar_sobre
-from .onion import SOBRE_CLARO
+from .onion import SOBRE, SOBRE_CLARO
 
 VERSION = 0x01
 PRIVADO = 0x01
@@ -79,6 +80,68 @@ class Mensaje:
 
     def vencido(self, ahora: float | None = None) -> bool:
         return (ahora or time.time()) > self.creado + self.ttl
+
+
+# ---------------------------------------------------------------------- #
+# Mensajes publicos (salen a clearnet por el gateway)
+# ---------------------------------------------------------------------- #
+TEMA = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")
+PUBLICO = SOBRE  # el mensaje publico tambien mide siempre lo mismo
+MAX_TEXTO_PUBLICO = 500  # limite del Worker, en caracteres
+
+
+@dataclass
+class MensajePublico:
+    """Mensaje para una sala publica. Viaja por el circuito hasta el gateway.
+
+        +-----+----------+------+-----------+-------+-------+-------+---------+
+        | VER | LON_TEMA | TEMA | LON_ALIAS | ALIAS | LON   | TEXTO | relleno |
+        | 1   | 1        |      | 1         |       | 2     |       | ceros   |
+        +-----+----------+------+-----------+-------+-------+-------+---------+
+
+    No lleva identidad del remitente: el gateway solo ve el alias que el
+    remitente eligio (o ninguno).
+    """
+    tema: str
+    texto: str
+    alias: str = ""
+
+    def validar(self) -> None:
+        if not TEMA.fullmatch(self.tema):
+            raise ErrorMensaje("tema invalido: minusculas, numeros y guiones, maximo 32")
+        if not self.texto.strip() or len(self.texto) > MAX_TEXTO_PUBLICO:
+            raise ErrorMensaje(f"el texto debe tener entre 1 y {MAX_TEXTO_PUBLICO} caracteres")
+        if len(self.alias.encode()) > MAX_ALIAS:
+            raise ErrorMensaje(f"el alias mide mas de {MAX_ALIAS} bytes")
+
+    def a_bytes(self) -> bytes:
+        self.validar()
+        tema, alias, texto = self.tema.encode(), self.alias.encode(), self.texto.encode()
+        datos = (bytes([VERSION, len(tema)]) + tema + bytes([len(alias)]) + alias +
+                 struct.pack(">H", len(texto)) + texto)
+        if len(datos) > PUBLICO:
+            raise ErrorMensaje(f"el mensaje publico no cabe: maximo {PUBLICO} bytes en total")
+        return datos + bytes(PUBLICO - len(datos))
+
+    @classmethod
+    def desde_bytes(cls, datos: bytes) -> "MensajePublico":
+        try:
+            if datos[0] != VERSION:
+                raise ErrorMensaje(f"version de mensaje publico desconocida: {datos[0]}")
+            i = 1
+            campos = []
+            for largo_campo in (1, 1, 2):
+                largo = int.from_bytes(datos[i:i + largo_campo], "big")
+                i += largo_campo
+                if i + largo > len(datos):
+                    raise ErrorMensaje("campo fuera de rango")
+                campos.append(datos[i:i + largo].decode())
+                i += largo
+        except (IndexError, UnicodeDecodeError) as e:
+            raise ErrorMensaje("mensaje publico malformado") from e
+        m = cls(campos[0], campos[2], campos[1])
+        m.validar()
+        return m
 
 
 class Buzon:

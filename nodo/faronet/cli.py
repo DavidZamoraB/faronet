@@ -2,6 +2,7 @@
 
     faronet --llave yo.key --escuchar 0.0.0.0:9001 --vecino 192.168.1.20:9001 --nombre ana
     faronet --faro /dev/ttyUSB0 --escuchar 0.0.0.0:9001 --nombre gateway-norte
+    faronet --llave gw.key --gateway --edge https://faronet.<cuenta>.workers.dev --escuchar 0.0.0.0:9101
 
 Abre una consola con los comandos: nodos, rutas, circuitos, enviar, buzon,
 panico, salir.
@@ -26,6 +27,7 @@ AYUDA = """comandos:
   rutas                     tabla de rutas (destino, metrica, enlace)
   circuitos                 circuitos que este nodo esta releyando
   enviar <nombre|id> <texto>  mensaje privado anonimo
+  publicar <tema> <texto>   mensaje publico (sale a clearnet por un gateway)
   buzon                     mensajes recibidos (con TTL)
   panico                    borra llaves y estado, y termina
   salir"""
@@ -46,6 +48,9 @@ def _argumentos(argv=None) -> argparse.Namespace:
     p.add_argument("--nombre", default="", help="seudonimo publicado en el directorio")
     p.add_argument("--alias", default="", help="alias que acompana los mensajes enviados")
     p.add_argument("--gateway", action="store_true", help="anunciarse como gateway")
+    p.add_argument("--edge", metavar="URL",
+                   help="URL del Worker: este gateway publica ahi los mensajes publicos "
+                        "y el directorio (requiere --gateway y el paquete faronet-gateway)")
     p.add_argument("--saltos", type=int, default=MIN_SALTOS, choices=range(MIN_SALTOS, MAX_SALTOS + 1))
     p.add_argument("--intervalo-rutas", type=float, default=10.0, metavar="SEG")
     p.add_argument("--sin-consola", action="store_true", help="solo releyar (servicio)")
@@ -132,6 +137,14 @@ def main(argv=None) -> int:
     for faro in faros:
         faro.al_panico(panico)
         nodo.agregar_enlace(EnlaceFaro(faro))
+    if args.edge:
+        if not args.gateway:
+            sys.exit("--edge requiere --gateway")
+        try:
+            from faronet_gateway.puente import Puente
+        except ImportError:
+            sys.exit("--edge requiere el paquete faronet-gateway (pip install -e gateway)")
+        Puente(nodo, args.edge).iniciar()
     servidor = None
     if args.escuchar:
         host, puerto = parsear_host_puerto(args.escuchar)
@@ -192,6 +205,12 @@ def _consola(nodo: Nodo, args, panico) -> None:
             try:
                 nodo.enviar_mensaje(partes[1], " ".join(partes[2:]), args.alias)
                 print("entregado a la salida del circuito")
+            except (ErrorNodo, ValueError) as e:
+                print(f"error: {e}")
+        elif cmd == "publicar" and len(partes) >= 3:
+            try:
+                nodo.publicar(partes[1], " ".join(partes[2:]), args.alias)
+                print(f"publicado en #{partes[1]}")
             except (ErrorNodo, ValueError) as e:
                 print(f"error: {e}")
         elif cmd == "buzon":

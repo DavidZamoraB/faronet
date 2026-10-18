@@ -1,0 +1,39 @@
+# Despliegue reproducible: `npx wrangler deploy` (ver README.md).
+# No hay secretos en este archivo: GATEWAYS son llaves PUBLICAS.
+name = "faronet"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+
+# Politica de no registro: sin logs ni trazas de las peticiones.
+[observability]
+enabled = false
+
+[vars]
+# Llaves publicas Ed25519 (hex) de los gateways autorizados, separadas por coma.
+# Es la llave de firma del nodo gateway (`faronet-edge llave`).
+GATEWAYS = ""
+
+[[durable_objects.bindings]]
+name = "CENTRAL"
+class_name = "Central"
+
+[[durable_objects.bindings]]
+name = "SALAS"
+class_name = "Sala"
+
+[[durable_objects.bindings]]
+name = "BUZON"
+class_name = "Buzon"
+
+# Plan gratuito: solo Durable Objects con SQLite.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Central", "Sala", "Buzon"]
+
+[[ratelimits]]
+name = "LIMITE"
+namespace_id = "1001"
+
+  [ratelimits.simple]
+  limit = 60
+  period = 60
