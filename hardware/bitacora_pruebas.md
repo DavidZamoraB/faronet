@@ -12,23 +12,23 @@ Multímetro en modo continuidad (pitido) o en Ω.
 
 | # | Prueba                                         | Esperado             | Medido | ✔/✘ |
 |---|------------------------------------------------|----------------------|--------|-----|
-| 1 | Riel +5V ↔ riel GND (en Ω)                     | **≈ 10 kΩ** (es el trimpot RV1); nunca ≈ 0 Ω | | |
+| 1 | Riel +5V ↔ riel GND (en Ω)                     | **≈ 11 kΩ** (es el divisor R9 + R10); nunca ≈ 0 Ω | | |
 | 2 | Riel +5V ↔ pin 5V del header del Nano          | Continuidad          |        |     |
 | 3 | Riel GND ↔ los dos pines GND del header        | Continuidad          |        |     |
 | 4 | Zócalo pin 8 ↔ +5V; pin 4 ↔ GND                | Continuidad          |        |     |
 | 5 | Zócalo pin 5 ↔ GND; pin 6 ↔ +5V                | Continuidad          |        |     |
 | 6 | Zócalo pin 3 ↔ header A0 ↔ emisor de Q2        | Continuidad          |        |     |
 | 7 | Zócalo pin 1 ↔ header D2                       | Continuidad          |        |     |
-| 8 | Zócalo pin 2 ↔ cursor de RV1                   | Continuidad          |        |     |
+| 8 | Zócalo pin 2 ↔ unión de R9 y R10               | Continuidad          |        |     |
 | 9 | Header D4 ↔ base de Q1 (en Ω)                  | ≈ 1 kΩ (R2)          |        |     |
 | 10| Emisor de Q1 ↔ GND                             | Continuidad          |        |     |
 | 11| Header D3 ↔ GND con SW1 presionado / suelto    | Continuidad / abierto |       |     |
 | 12| Pines vecinos del header (D2↔D3, D3↔D4…)       | Sin continuidad      |        |     |
 | 13| Pines vecinos del zócalo (1↔2, 2↔3…)           | Sin continuidad      |        |     |
-| 14| R1, R3, R5 medidas en la placa (Ω)             | ≈ 82 / 10 k / 4,7 k  |        |     |
+| 14| R1, R3, R5, R9, R10 medidas en la placa (Ω)    | ≈ 82 / 10 k / 10 k / 10 k / 1 k |  |  |
 
 > La prueba 1 es la más importante: **si hay corto entre +5V y GND no se
-> conecta el USB** hasta encontrarlo. Sin pitido en continuidad y ≈ 10 kΩ en
+> conecta el USB** hasta encontrarlo. Sin pitido en continuidad y ≈ 11 kΩ en
 > ohmios es lo correcto. Con C2 montado, el multímetro en Ω puede
 > marcar un valor que sube poco a poco (el capacitor se carga): eso es normal;
 > un valor fijo cercano a 0 Ω no lo es.
@@ -42,7 +42,7 @@ Punta negra en GND. Para las mediciones del emisor usar
 |----|-------------------------------------------------|--------------------|-----------------|--------|-----|
 | 15 | Riel +5V                                        | reposo             | 4,6 – 5,1 V     |        |     |
 | 16 | LM393 pin 8                                     | reposo             | igual que +5V   |        |     |
-| 17 | LM393 pin 2 (umbral)                            | girar RV1          | 0 – 5 V, varía  |        |     |
+| 17 | LM393 pin 2 (umbral)                            | reposo             | ≈ 0,45 V        |        |     |
 | 18 | Nodo SENSOR (A0)                                | Q2 tapado          | < 0,3 V         |        |     |
 | 19 | Nodo SENSOR (A0)                                | luz del aula       | ______ V        |        |     |
 | 20 | Nodo SENSOR (A0)                                | LED IR del otro Faro encendido a 10 cm | claramente mayor que #19 | | |
@@ -61,12 +61,14 @@ Punta negra en GND. Para las mediciones del emisor usar
 2. En el Faro receptor: `faro -p /dev/ttyUSB0 sondear --continuo` y anotar la
    lectura analógica (0–1023) con el LED del otro **apagado** (`L_off`) y
    **encendido** (`L_on`, usando `faro -p <otro puerto> emisor encender`).
-3. Ajustar RV1 hasta que el voltaje en LM393 pin 2 quede a la mitad:
-   `V_umbral ≈ (L_off + L_on) / 2 × 5 V / 1023`.
-4. Verificar que `comparador=` cambie de 0 a 1 al encender el otro LED.
+3. El umbral fijo (≈ 93 en A0) debe quedar entre `L_off` y `L_on`. Si no,
+   cambiar R10 según la tabla de [esquematico.md](esquematico.md).
+4. Verificar que `comparador=` cambie de 0 a 1 al encender el otro LED. Con un
+   solo Faro (LED propio y una hoja blanca encima de los dos):
+   `python hardware/calibrar_receptor.py /dev/ttyUSB0` debe mostrar LISTO.
 
-| Distancia | L_off | L_on | V_umbral ajustado |
-|-----------|-------|------|-------------------|
+| Distancia | L_off | L_on | R10 usada |
+|-----------|-------|------|-----------|
 |           |       |      |                   |
 
 ## 4. Tasa de transferencia efectiva y BER (≥ 3 distancias, luz ambiente normal)

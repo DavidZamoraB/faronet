@@ -1,6 +1,6 @@
 # hardware
 
-El Faro: Arduino Nano + emisor IR con transistor + receptor con fototransistor y
+El Faro: Arduino Nano (o Uno) + emisor IR con transistor + receptor con fototransistor y
 comparador LM393 + LEDs TX/RX/estado + botón de pánico, soldado en placa
 perforada con headers para poder retirar el Nano.
 
@@ -10,6 +10,7 @@ perforada con headers para poder retirar el Nano.
 | [bom.md](bom.md) | Lista de materiales con costo aproximado en colones |
 | [placa_perforada.md](placa_perforada.md) | Distribución en la placa, orden de soldadura, técnica y criterios de calidad |
 | [bitacora_pruebas.md](bitacora_pruebas.md) | Plantilla de pruebas con multímetro, calibración y medición de BER |
+| [calibrar_receptor.py](calibrar_receptor.py) | Prueba del umbral del receptor: alterna el LED IR propio y muestra A0 y el comparador |
 | `fotos/` | Fotos de ambas caras de la placa (pendiente) |
 | `kicad/` | Proyecto KiCad del esquemático (pendiente) |
 
@@ -18,7 +19,7 @@ perforada con headers para poder retirar el Nano.
 1. Comprar materiales ([bom.md](bom.md)), con repuestos.
 2. Armar en **protoboard** siguiendo [esquematico.md](esquematico.md).
 3. Cargar el firmware ([../firmware/README.md](../firmware/README.md)) y probar:
-   `faro info`, `faro sondear --continuo`, calibrar RV1, mandar tramas entre
+   `faro info`, `faro sondear --continuo`, `python hardware/calibrar_receptor.py`, mandar tramas entre
    los dos Faros.
 4. Dibujar el esquemático en KiCad a partir del prototipo que funciona.
 5. Pruebas de continuidad y soldadura en placa ([placa_perforada.md](placa_perforada.md)),

@@ -17,7 +17,7 @@ protoboard a una placa perforada de 5 × 7 cm (≈ 18 × 24 agujeros, paso
  USB ===|           ARDUINO NANO                           | U1  |  |
  (nodo) |        (va montado sobre los headers)            |LM393|  |  ~2 cm de
         |                                                  +-----+  |  separación
-        |  [=== header hembra 1x15: D12 ... D2 ... TX1 ==]   RV1    |
+        |  [=== header hembra 1x15: D12 ... D2 ... TX1 ==] R9 R10   |
         |                                                           |  Q2 + tubo ->
         |   R2  Q1  R1  C2                         R3  R4  R5       |
         |                                                           |
@@ -55,14 +55,14 @@ De lo más bajo a lo más alto. Así la placa queda apoyada y plana al soltarla.
 
 1. **Rieles** de +5V y GND (alambre desnudo).
 2. **Puentes** (cables cortos sobre la placa) y resistencias acostadas:
-   R1–R8. Doblar las patas con la distancia justa, sin tensión.
+   R1–R10. Doblar las patas con la distancia justa, sin tensión.
 3. **Zócalo DIP-8** de U1 (sin el LM393 puesto). Muesca hacia el mismo lado
    que en el esquemático.
 4. **Headers hembra** del Nano. Truco: poner el Nano encajado en los headers
    mientras se sueldan, para que queden paralelos y a la distancia exacta.
    Retirar el Nano después de soldar las dos puntas de cada tira y antes de
    seguir con el resto (el calor no le hace bien).
-5. C1, botón SW1, trimpot RV1.
+5. C1 y botón SW1.
 6. Q1 (2N2222A): verificar el orden E-B-C con el multímetro **antes**.
 7. C2 (electrolítico): la franja "−" va a GND.
 8. LEDs indicadores (pata larga = ánodo hacia la resistencia).
