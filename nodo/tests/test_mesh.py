@@ -12,7 +12,8 @@ from faronet.celda import CELDA, CUERPO, Celda, ErrorCelda
 from faronet.cripto import ErrorCripto, HandshakeCliente, Identidad, handshake_rele
 from faronet.directorio import ROL_GATEWAY, ROL_RELE, Directorio, Entrada, ErrorDirectorio
 from faronet.enlaces import EnlaceMemoria, EnlaceTCP, ServidorTCP
-from faronet.mensaje import Buzon, ErrorMensaje, Mensaje, MensajePublico, MAX_TEXTO, PUBLICO
+from faronet.mensaje import (Buzon, ErrorMensaje, Mensaje, MensajePublico, MAX_TEXTO, PUBLICO,
+                             PRIVADO, TEMA_PRIVADO)
 from faronet.nodo import ErrorNodo, Nodo
 from faronet.ruteo import INFINITO, TablaRutas, codificar_anuncios, decodificar_anuncios
 
@@ -143,6 +144,17 @@ class TestMensaje(unittest.TestCase):
         with self.assertRaises(ErrorCripto):
             Mensaje.abrir(Identidad.nueva(), corto)
 
+    def test_tema_privado_viaja_dentro_del_sobre(self):
+        dest = Identidad.nueva()
+        sobre = Mensaje("reunion a las 8", alias="ana", tema="vecinos").sellar(dest.llave_onion)
+        self.assertEqual(len(sobre), O.SOBRE)  # mismo tamano que un privado normal
+        m = Mensaje.abrir(dest, sobre)
+        self.assertEqual((m.tipo, m.tema, m.alias, m.texto),
+                         (TEMA_PRIVADO, "vecinos", "ana", "reunion a las 8"))
+        self.assertEqual(Mensaje.abrir(dest, Mensaje("sin tema").sellar(dest.llave_onion)).tipo, PRIVADO)
+        with self.assertRaises(ErrorMensaje):
+            Mensaje("x", tema="Con Espacios").a_bytes()
+
     def test_buzon_respeta_ttl(self):
         b = Buzon()
         b.agregar(Mensaje("viejo", ttl=1, creado=int(time.time()) - 5))
@@ -231,9 +243,26 @@ class TestRed(unittest.TestCase):
         self.assertTrue(esperar(lambda: n0.rutas.siguiente(self.nodos[2].id) is not None
                                 and n0.rutas.metrica(self.nodos[2].id) == 2))
 
+    def test_tema_privado_llega_a_cada_miembro(self):
+        origen = self.nodos[0]
+        recibidos = {4: [], 5: []}
+        for i, lista in recibidos.items():
+            self.nodos[i].al_mensaje.append(lista.append)
+        origen.crear_tema_privado("vecinos", ["n4", "n5", "n0"])  # n0 es el propio nodo
+        self.assertEqual(origen.enviar_tema("vecinos", "solo para el grupo", alias="ana"), [])
+        self.assertTrue(esperar(lambda: recibidos[4] and recibidos[5]))
+        for lista in recibidos.values():
+            self.assertEqual((lista[0].tema, lista[0].texto, lista[0].alias),
+                             ("vecinos", "solo para el grupo", "ana"))
+        self.assertEqual(origen.enviar_tema("vecinos", "otro"), [])
+        with self.assertRaises(ErrorNodo):
+            origen.enviar_tema("desconocido", "x")
+
     def test_panico_borra_estado(self):
         n = self.nodos[1]
+        n.crear_tema_privado("secreto", ["n2"])
         n.panico()
+        self.assertEqual(n.temas_privados, {})
         self.assertEqual(n.directorio.entradas(), [])
         self.assertEqual(n.buzon.mensajes(), [])
         self.assertEqual(n.identidad.semilla, bytes(32))
@@ -280,6 +309,12 @@ class TestPublicar(unittest.TestCase):
         self.assertEqual([(m.tema, m.texto, m.alias) for m in self.publicados],
                          [("general", "hola clearnet", "anon")])
         self.assertNotIn(self.nodos[0].id, vistos)  # el gateway no ve al origen
+
+    def test_tema_privado_no_sale_a_clearnet(self):
+        self.nodos[0].crear_tema_privado("vecinos", ["n1"])
+        with self.assertRaises(ErrorNodo):
+            self.nodos[0].publicar("vecinos", "esto no debe salir")
+        self.assertEqual(self.publicados, [])
 
     def test_gateway_sin_edge(self):
         self.gateway.al_publicar = None

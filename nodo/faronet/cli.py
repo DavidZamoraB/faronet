@@ -4,8 +4,8 @@
     faronet --faro /dev/ttyUSB0 --escuchar 0.0.0.0:9001 --nombre gateway-norte
     faronet --llave gw.key --gateway --edge https://faronet.<cuenta>.workers.dev --escuchar 0.0.0.0:9101
 
-Abre una consola con los comandos: nodos, rutas, circuitos, enviar, buzon,
-panico, salir.
+Abre una consola con los comandos: nodos, rutas, circuitos, enviar, publicar,
+tema, buzon, panico, salir.
 """
 from __future__ import annotations
 
@@ -28,6 +28,10 @@ AYUDA = """comandos:
   circuitos                 circuitos que este nodo esta releyando
   enviar <nombre|id> <texto>  mensaje privado anonimo
   publicar <tema> <texto>   mensaje publico (sale a clearnet por un gateway)
+  tema crear <tema> <miembro> [miembro ...]
+                            marca un tema como privado (solo dentro de FaroNet)
+  tema enviar <tema> <texto>  mensaje a todos los miembros del tema privado
+  tema ver                  temas privados y sus miembros
   buzon                     mensajes recibidos (con TTL)
   panico                    borra llaves y estado, y termina
   salir"""
@@ -127,7 +131,8 @@ def main(argv=None) -> int:
 
     def al_mensaje(m: Mensaje):
         de = m.alias or "anonimo"
-        print(f"\n[mensaje de {de}] {m.texto}\n> ", end="", flush=True)
+        donde = f" en #{m.tema} (privado)" if m.tema else ""
+        print(f"\n[mensaje de {de}{donde}] {m.texto}\n> ", end="", flush=True)
 
     nodo.al_mensaje.append(al_mensaje)
     nodo.iniciar()
@@ -213,13 +218,37 @@ def _consola(nodo: Nodo, args, panico) -> None:
                 print(f"publicado en #{partes[1]}")
             except (ErrorNodo, ValueError) as e:
                 print(f"error: {e}")
+        elif cmd == "tema" and len(partes) >= 2:
+            _tema(nodo, args, partes[1:])
         elif cmd == "buzon":
             for m in nodo.buzon.mensajes():
-                print(f"  [{m.alias or 'anonimo'}] {m.texto}")
+                tema = f"#{m.tema} " if m.tema else ""
+                print(f"  {tema}[{m.alias or 'anonimo'}] {m.texto}")
         elif cmd == "panico":
             panico()
         else:
             print(AYUDA)
+
+
+def _tema(nodo: Nodo, args, partes: list[str]) -> None:
+    accion = partes[0]
+    try:
+        if accion == "crear" and len(partes) >= 3:
+            nodo.crear_tema_privado(partes[1], partes[2:])
+            print(f"#{partes[1]} es privado: {', '.join(partes[2:])}")
+        elif accion == "enviar" and len(partes) >= 3:
+            fallidos = nodo.enviar_tema(partes[1], " ".join(partes[2:]), args.alias)
+            if fallidos:
+                print(f"no se pudo entregar a: {', '.join(fallidos)}")
+            else:
+                print(f"entregado a los miembros de #{partes[1]}")
+        elif accion == "ver":
+            for tema, miembros in sorted(nodo.temas_privados.items()):
+                print(f"  #{tema}: {', '.join(miembros)}")
+        else:
+            print(AYUDA)
+    except (ErrorNodo, ValueError) as e:
+        print(f"error: {e}")
 
 
 if __name__ == "__main__":

@@ -11,6 +11,10 @@ mide siempre SOBRE bytes y nadie en el camino aprende el largo del texto.
 
 ALIAS es un seudonimo opcional que el remitente elige; FaroNet no le agrega
 ninguna identidad del remitente.
+
+Con TIPO = TEMA_PRIVADO, despues del ALIAS van LON_TEMA (1) y TEMA: el
+mensaje pertenece a un tema privado. El tema viaja dentro del sobre, asi que
+ni los reles ni el gateway lo ven, y estos mensajes nunca salen a clearnet.
 """
 from __future__ import annotations
 
@@ -24,6 +28,7 @@ from .onion import SOBRE, SOBRE_CLARO
 
 VERSION = 0x01
 PRIVADO = 0x01
+TEMA_PRIVADO = 0x02
 TTL_DEFECTO = 24 * 3600
 MAX_ALIAS = 32
 _CABECERA = struct.Struct(">BBII")
@@ -41,16 +46,29 @@ class Mensaje:
     ttl: int = TTL_DEFECTO
     creado: int = field(default_factory=lambda: int(time.time()))
     tipo: int = PRIVADO
+    tema: str = ""
+
+    def __post_init__(self) -> None:
+        if self.tema:
+            self.tipo = TEMA_PRIVADO
 
     def a_bytes(self) -> bytes:
         alias = self.alias.encode()
         texto = self.texto.encode()
         if len(alias) > MAX_ALIAS:
             raise ErrorMensaje(f"el alias mide mas de {MAX_ALIAS} bytes")
+        if self.tipo not in (PRIVADO, TEMA_PRIVADO):
+            raise ErrorMensaje(f"tipo de mensaje desconocido: {self.tipo}")
+        tema = b""
+        if self.tipo == TEMA_PRIVADO:
+            if not TEMA.fullmatch(self.tema):
+                raise ErrorMensaje("tema invalido: minusculas, numeros y guiones, maximo 32")
+            tema = bytes([len(self.tema)]) + self.tema.encode()
         datos = (_CABECERA.pack(VERSION, self.tipo, self.creado, self.ttl) +
-                 bytes([len(alias)]) + alias + struct.pack(">H", len(texto)) + texto)
+                 bytes([len(alias)]) + alias + tema + struct.pack(">H", len(texto)) + texto)
         if len(datos) > SOBRE_CLARO:
-            raise ErrorMensaje(f"el mensaje no cabe: maximo {MAX_TEXTO - len(alias)} bytes de texto")
+            maximo = MAX_TEXTO - len(alias) - len(tema)
+            raise ErrorMensaje(f"el mensaje no cabe: maximo {maximo} bytes de texto")
         return datos + bytes(SOBRE_CLARO - len(datos))
 
     @classmethod
@@ -59,17 +77,26 @@ class Mensaje:
             version, tipo, creado, ttl = _CABECERA.unpack_from(datos)
             if version != VERSION:
                 raise ErrorMensaje(f"version de mensaje desconocida: {version}")
+            if tipo not in (PRIVADO, TEMA_PRIVADO):
+                raise ErrorMensaje(f"tipo de mensaje desconocido: {tipo}")
             i = _CABECERA.size
             lon_alias = datos[i]
             alias = datos[i + 1:i + 1 + lon_alias].decode()
             i += 1 + lon_alias
+            tema = ""
+            if tipo == TEMA_PRIVADO:
+                lon_tema = datos[i]
+                tema = datos[i + 1:i + 1 + lon_tema].decode()
+                i += 1 + lon_tema
+                if not TEMA.fullmatch(tema):
+                    raise ErrorMensaje("tema privado invalido")
             (lon,) = struct.unpack_from(">H", datos, i)
             if i + 2 + lon > len(datos):
                 raise ErrorMensaje("LON del texto fuera de rango")
             texto = datos[i + 2:i + 2 + lon].decode()
         except (struct.error, IndexError, UnicodeDecodeError) as e:
             raise ErrorMensaje("mensaje malformado") from e
-        return cls(texto, alias, ttl, creado, tipo)
+        return cls(texto, alias, ttl, creado, tipo, tema)
 
     def sellar(self, llave_onion_destino: bytes) -> bytes:
         return cerrar_sobre(llave_onion_destino, self.a_bytes())
