@@ -11,7 +11,7 @@ enabled = false
 [vars]
 # Llaves publicas Ed25519 (hex) de los gateways autorizados, separadas por coma.
 # Es la llave de firma del nodo gateway (`faronet-edge llave`).
-GATEWAYS = ""
+GATEWAYS = "3c48d17bf8e4863fe10cbc9479a90c6bf627fcedc039ab8d6ff396ce51a30a73"
 
 [[durable_objects.bindings]]
 name = "CENTRAL"

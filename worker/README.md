@@ -86,3 +86,9 @@ npx wrangler deploy
 ```
 
 No hay secretos en el repositorio: `GATEWAYS` son llaves **públicas**.
+
+Desplegado en **https://faronet.faronet-worker.workers.dev**. `GATEWAYS` tiene la
+llave del gateway de la Raspberry Pi (`faronet-gw`), que arranca con
+`faronet --gateway --edge https://faronet.faronet-worker.workers.dev ...`.
+Probado de punta a punta: cliente → circuito onion (3 saltos en la Pi) →
+gateway → Worker → sala `#general`.
