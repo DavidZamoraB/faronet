@@ -28,7 +28,7 @@ from .celda import Celda, ErrorCelda, ID_LEN, SIN_ID
 from .cripto import CapaOnion, ErrorCripto, HandshakeCliente, Identidad, handshake_rele
 from .directorio import ROL_GATEWAY, ROL_RELE, Directorio, Entrada, VIGENCIA
 from .enlaces import Enlace
-from .mensaje import Buzon, ErrorMensaje, Mensaje, MensajePublico
+from .mensaje import TEMA, Buzon, ErrorMensaje, Mensaje, MensajePublico
 from .ruteo import TablaRutas, codificar_anuncios, decodificar_anuncios
 
 INACTIVIDAD_TRAMO = 10 * 60  # un circuito sin trafico se olvida a los 10 min
@@ -83,6 +83,9 @@ class Nodo:
         self.buzon = Buzon()
         self.enlaces: list[Enlace] = []
         self.al_mensaje: list[Callable[[Mensaje], None]] = []
+        # Temas privados que conoce este nodo: tema -> miembros (nombre o ID).
+        # Solo en memoria; nunca salen de FaroNet.
+        self.temas_privados: dict[str, list[str]] = {}
         # En un gateway: sube un mensaje publico al edge. True si se publico.
         self.al_publicar: Optional[Callable[[MensajePublico], bool]] = None
         self._lock = threading.RLock()
@@ -116,6 +119,7 @@ class Nodo:
             self._por_anterior.clear()
             self._por_siguiente.clear()
         self.buzon.borrar()
+        self.temas_privados.clear()
         self.directorio.borrar()
         self.rutas.borrar()
         self.identidad.borrar()
@@ -473,12 +477,15 @@ class Nodo:
         circuito.respuestas.put(None)  # despierta a quien este esperando
         self.enviar_celda(Celda(C.DESTRUIR, destino=circuito.primero, circuito=circuito.id))
 
-    def enviar_mensaje(self, destino: str | bytes, texto: str, alias: str = "") -> None:
-        """Envia `texto` cifrado de extremo a extremo por un circuito nuevo."""
+    def enviar_mensaje(self, destino: str | bytes, texto: str, alias: str = "", tema: str = "") -> None:
+        """Envia `texto` cifrado de extremo a extremo por un circuito nuevo.
+
+        Con `tema`, el mensaje pertenece a ese tema privado (el tema va dentro
+        del sobre: los reles no lo ven)."""
         entrada = self.directorio.buscar(destino)
         if entrada is None:
             raise ErrorNodo(f"destino desconocido en el directorio: {destino!r}")
-        sobre = Mensaje(texto, alias).sellar(entrada.llave_onion)
+        sobre = Mensaje(texto, alias, tema=tema).sellar(entrada.llave_onion)
         circuito = self.construir_circuito(self.elegir_saltos(evitar=(entrada.id,)))
         try:
             self._enviar_rele(circuito, O.ENTREGAR, entrada.id + sobre)
@@ -490,11 +497,43 @@ class Nodo:
         finally:
             self.cerrar_circuito(circuito)
 
+    # ------------------------------------------------------------------ #
+    # Temas privados: residen unicamente dentro de FaroNet
+    # ------------------------------------------------------------------ #
+    def crear_tema_privado(self, tema: str, miembros: list[str]) -> None:
+        """Marca `tema` como privado con sus miembros (nombres o IDs)."""
+        if not TEMA.fullmatch(tema):
+            raise ErrorNodo("tema invalido: minusculas, numeros y guiones, maximo 32")
+        if not miembros:
+            raise ErrorNodo("un tema privado necesita al menos un miembro")
+        self.temas_privados[tema] = list(dict.fromkeys(miembros))
+
+    def enviar_tema(self, tema: str, texto: str, alias: str = "") -> list[str]:
+        """Envia `texto` a cada miembro del tema privado, cada uno por su
+        propio circuito y cifrado hacia su llave. Devuelve los miembros a los
+        que no se pudo entregar."""
+        miembros = self.temas_privados.get(tema)
+        if miembros is None:
+            raise ErrorNodo(f"#{tema} no es un tema privado de este nodo (use 'tema crear')")
+        fallidos = []
+        for miembro in miembros:
+            entrada = self.directorio.buscar(miembro)
+            if entrada is not None and entrada.id == self.id:
+                continue
+            try:
+                self.enviar_mensaje(miembro, texto, alias, tema=tema)
+            except (ErrorNodo, ValueError):
+                fallidos.append(miembro)
+        return fallidos
+
     def publicar(self, tema: str, texto: str, alias: str = "") -> None:
         """Publica en una sala publica (clearnet) a traves de un gateway.
 
         El gateway es el ultimo salto del circuito: conoce el mensaje, que de
-        todos modos sera publico, pero no quien lo origino."""
+        todos modos sera publico, pero no quien lo origino. Los temas privados
+        nunca se publican."""
+        if tema in self.temas_privados:
+            raise ErrorNodo(f"#{tema} es un tema privado: no sale de FaroNet (use 'tema enviar')")
         datos = MensajePublico(tema, texto, alias).a_bytes()
         gateways = [e for e in self.directorio.entradas() if e.es(ROL_GATEWAY) and e.id != self.id]
         if not gateways:

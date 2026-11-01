@@ -28,7 +28,21 @@ faronet --llave rele.key --escuchar 0.0.0.0:9101 --vecino 10.0.0.5:9101 --sin-co
 ```
 
 Consola: `nodos`, `rutas`, `circuitos`, `enviar <nombre|id> <texto>`,
-`publicar <tema> <texto>`, `buzon`, `panico`, `salir`. Ver `faronet --help` para todos los parámetros.
+`publicar <tema> <texto>`, `tema crear|enviar|ver`, `buzon`, `panico`, `salir`.
+Ver `faronet --help` para todos los parámetros.
+
+**Temas privados** (residen únicamente dentro de FaroNet):
+
+```
+> tema crear vecinos ana beto carla     # marca #vecinos como privado y sus miembros
+> tema enviar vecinos reunión a las 8   # llega a cada miembro, cifrado y anónimo
+> publicar vecinos hola                 # error: un tema privado no sale a clearnet
+```
+
+Cada mensaje del tema viaja a cada miembro como mensaje privado (un circuito
+y un sobre por miembro). El nombre del tema va dentro del sobre, así que ni
+los relés ni el gateway lo ven. La lista de miembros vive solo en memoria y
+el pánico la borra.
 
 Demo local con 5 reles en línea: `./demo_local.sh` (ver el comentario del script).
 
