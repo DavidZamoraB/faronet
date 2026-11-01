@@ -1,0 +1,1041 @@
+
+
+Proyecto 1 - Redes de Computadoras                             D. Zamora
+Instituto Tecnologico de Costa Rica                            D. Zamora
+Request for Comments: FARONET-1                                    ITCR
+Category: Experimental                                    Noviembre 2026
+
+
+        FaroNet: Enlace Optico (Faro), Red Mesh Anonima y Salida
+                           Serverless en el Edge
+
+Resumen
+
+   Este documento especifica FaroNet, una red de mensajeria construida
+   desde el medio fisico hasta la aplicacion.  Define (1) la Capa 1 del
+   "Faro", un dispositivo que transmite tramas de hasta 128 bytes con
+   luz infrarroja, junto con el protocolo serial entre el Faro y la
+   computadora del nodo; (2) la mesh FaroNet, que transporta celdas de
+   tamano fijo por Ethernet, WiFi o el Faro, con enrutamiento por
+   vector de distancias, un directorio de nodos firmado y circuitos
+   onion de 3 a 5 saltos, de modo que ningun nodo intermedio conoce a
+   la vez el origen y el destino de un mensaje; y (3) la salida a
+   Internet a traves de un gateway que publica solo los mensajes
+   publicos en una aplicacion serverless (Cloudflare Workers).
+
+Estado de este memo
+
+   Este documento es un entregable academico del curso Redes de
+   Computadoras (ITCR, II semestre 2026).  No es un estandar de
+   Internet ni fue revisado por el IETF.  Sigue la guia de estilo de
+   RFC 7322 y usa ASCII en todo el texto, incluidos los diagramas.
+   Por esa razon el texto en espanol se escribe sin tildes.
+
+Tabla de contenido
+
+   1.  Introduccion
+     1.1.  Lenguaje de requisitos
+     1.2.  Terminologia
+     1.3.  Arquitectura
+   2.  Capa 1: el Faro
+     2.1.  Medio y codificacion de linea
+     2.2.  Sincronizacion
+     2.3.  Formato de la trama
+     2.4.  Direcciones fisicas
+     2.5.  Acceso al medio
+     2.6.  Tramas armadas fuera del Faro
+   3.  Interfaz nodo-Faro (DispositivoLuzAdaptador)
+   4.  FaroNet: capas 2 y 3
+     4.1.  Identidad de los nodos
+     4.2.  Celdas
+     4.3.  Enlaces
+     4.4.  Enrutamiento dinamico
+     4.5.  Directorio de nodos
+     4.6.  Circuitos virtuales
+     4.7.  Capas de la cebolla
+     4.8.  Mensajes de rele
+   5.  Capa 7 dentro de FaroNet
+     5.1.  Mensajes privados
+     5.2.  Mensajes publicos
+   6.  Capa 7 en el edge
+     6.1.  Relay del gateway
+     6.2.  Salas publicas y feeds
+     6.3.  Buzon muerto
+     6.4.  Directorio publico
+     6.5.  Limite de peticiones y politica de no registro
+   7.  Versionado
+   8.  Modelo de amenazas
+   9.  Consideraciones de privacidad
+   10. Consideraciones de seguridad
+   11. Consideraciones de IANA
+   12. Referencias
+     12.1.  Referencias normativas
+     12.2.  Referencias informativas
+   Apendice A.  Constantes
+   Apendice B.  Medicion de tasa y BER
+   Direcciones de los autores
+
+
+1.  Introduccion
+
+   El cifrado protege el contenido de un mensaje, pero no los
+   metadatos: quien habla con quien, cuando y con que frecuencia.
+   FaroNet busca proteger tambien esos metadatos.
+
+   La red une "comunidades" separadas.  Dentro de una comunidad los
+   nodos se conectan por TCP/IP (Ethernet o WiFi).  Entre comunidades
+   el unico canal es un par de Faros que se comunican con luz.  Un
+   gateway conecta la red con Internet, pero solo deja salir mensajes
+   que el remitente marco como publicos, y lo hace sin saber quien los
+   origino.
+
+   El codigo de referencia esta en
+   https://github.com/DavidZamoraB/faronet: el firmware en "firmware/",
+   la biblioteca DispositivoLuzAdaptador en "adaptador/", los nodos en
+   "nodo/", el gateway en "gateway/" y el Worker en "worker/".
+
+1.1.  Lenguaje de requisitos
+
+   Las palabras clave "DEBE", "NO DEBE", "REQUERIDO", "DEBERIA",
+   "NO DEBERIA", "RECOMENDADO", "PUEDE" y "OPCIONAL" se interpretan
+   como "MUST", "MUST NOT", "REQUIRED", "SHOULD", "SHOULD NOT",
+   "RECOMMENDED", "MAY" y "OPTIONAL" de BCP 14 [RFC2119] [RFC8174]
+   cuando aparecen en mayusculas.
+
+1.2.  Terminologia
+
+   Faro:  Dispositivo de transmision por luz.  Un microcontrolador
+      (Arduino) con un emisor IR de 940 nm, un receptor con
+      fototransistor y comparador, LEDs de estado y un boton de panico,
+      conectado por USB a un nodo.
+
+   Nodo:  Programa FaroNet que corre en una computadora.  Todo nodo es
+      rele; algunos ademas son gateway.
+
+   Celda:  Unidad de las capas 2 y 3 de FaroNet.  Siempre mide 512
+      bytes.
+
+   Circuito:  Camino virtual negociado de 3 a 5 reles que un cliente
+      usa para enviar mensajes.
+
+   Salida:  Ultimo rele de un circuito.
+
+   Gateway:  Nodo que, ademas de ser rele, publica mensajes publicos en
+      el edge.
+
+   Edge:  Aplicacion serverless (Cloudflare Workers) que expone salas,
+      feeds, buzon muerto y directorio a Internet ("clearnet").
+
+   ID de nodo:  8 bytes derivados de la llave publica de firma del
+      nodo (Seccion 4.1).
+
+   Direccion fisica:  4 bytes que identifican a un Faro en el medio
+      optico (Seccion 2.4).  No tiene relacion con el ID de nodo.
+
+1.3.  Arquitectura
+
+     Comunidad A                                 Comunidad B
+   +----------+   TCP   +--------+  USB  +------+          +------+
+   | Nodo PC  |---------| Nodo   |-------|Faro A| ~~ luz ~~|Faro B|
+   | (cliente)|         | (rele) |       +------+          +------+
+   +----------+         +--------+                             | USB
+                                                        +------------+
+                                                        | Gateway    |
+                                                        | (Raspberry)|
+                                                        +------------+
+                                                              | HTTPS
+                                                              v
+                                                       +-------------+
+                                                       | Edge:       |
+                                                       | Workers     |
+                                                       +-------------+
+                                                              |
+                                                clearnet (web, feeds)
+
+   Capas implementadas:
+
+   +------------+-------------------------------------------+---------+
+   | Capa       | Funcion                                   | Seccion |
+   +------------+-------------------------------------------+---------+
+   | 7 (edge)   | Salas, feeds, buzon muerto, directorio    | 6       |
+   | 7 (mesh)   | Mensajes privados y publicos              | 5       |
+   | onion      | Circuitos de 3 a 5 saltos, una capa AEAD  | 4.6-4.8 |
+   |            | por salto                                 |         |
+   | 3          | Celdas con destino de nodo, vector de     | 4.2,4.4 |
+   |            | distancias, directorio firmado            |         |
+   | 2          | Enlaces TCP y Faro (fragmentacion)        | 4.3     |
+   | 1          | Faro: Manchester, trama, CRC, CSMA/CA     | 2, 3    |
+   +------------+-------------------------------------------+---------+
+
+
+2.  Capa 1: el Faro
+
+2.1.  Medio y codificacion de linea
+
+   El medio es luz infrarroja de 940 nm, modulada por encendido y
+   apagado (OOK) con codificacion Manchester segun la convencion de
+   IEEE 802.3: el bit 0 es una transicion de encendido a apagado y el
+   bit 1 de apagado a encendido, a la mitad del tiempo de bit.  En
+   reposo el emisor DEBE estar apagado.
+
+   La velocidad es configurable de 500 a 20000 bit/s; por defecto es
+   2000 bit/s.  Los dos extremos de un enlace DEBEN usar la misma
+   velocidad.
+
+   Se eligio Manchester sobre OOK simple porque:
+
+   o  Es autosincronizante: siempre hay un flanco a mitad de bit, asi
+      que el receptor corrige el desfase entre los relojes de dos
+      Arduinos.  El decodificador tolera un error de +/-50% en cada
+      intervalo.
+
+   o  Tiene balance de continua: la mitad del tiempo hay luz, lo que
+      permite fijar el umbral del comparador una sola vez.
+
+   o  Detecta errores de linea: un intervalo que no mide ni medio bit
+      ni un bit completo es imposible, y la trama se descarta antes de
+      llegar al CRC.
+
+   El costo es duplicar el ancho de banda (2 baudios por bit).
+
+2.2.  Sincronizacion
+
+   +----------------------+---------+--------------------------------+
+   | Preambulo 4 x 0x55   | SFD     | Trama (14 a 128 bytes)         |
+   |                      | 0xD5    |                                |
+   +----------------------+---------+--------------------------------+
+
+   El preambulo 0x55 produce en Manchester solo intervalos de un bit
+   completo.  Despues de 8 intervalos seguidos el receptor sabe que cada
+   flanco cae a mitad de bit.  El SFD rompe la alternancia: el receptor
+   busca el patron de 16 bits 0x55D5.  Si encuentra 0xAA2A (el patron
+   negado), la senal llega invertida y el receptor DEBE invertir los
+   bits siguientes, de modo que la polaridad del hardware no importa.
+
+   Los bytes se transmiten con el bit mas significativo primero.  El
+   preambulo y el SFD no cuentan dentro de los 128 bytes de la trama.
+
+2.3.  Formato de la trama
+
+    0                   1                   2                   3
+    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |    VERSION    |      LON      |BANDER.| TIPO  |      SEQ      |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                   DIRECCION DESTINO (4 bytes)                 |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                   DIRECCION ORIGEN (4 bytes)                  |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                CARGA (LON bytes, 0 a 114) ...                 |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |            CRC-16             |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+   VERSION (1 byte):  0x01.  Un receptor DEBE descartar las tramas de
+      versiones que no conoce.  En modo promiscuo PUEDE entregarlas al
+      nodo.
+
+   LON (1 byte):  Longitud de la CARGA.  Es el campo aparte que define
+      el tamano del unico campo dinamico de la trama.
+
+   BANDERAS (4 bits):  El bit 0x10 del byte es PIDE_ACK.  Los demas son
+      reservados, DEBEN valer 0 al enviar y DEBEN ignorarse al recibir.
+
+   TIPO (4 bits):  0 = DATOS, 1 = ACK.  Los demas valores quedan
+      reservados.
+
+   SEQ (1 byte):  Numero de secuencia.  Un ACK repite el SEQ de la
+      trama que confirma.
+
+   DESTINO (4 bytes):  Direccion fisica destino.  FF:FF:FF:FF es
+      difusion.
+
+   ORIGEN (4 bytes):  Direccion fisica de quien transmite.
+
+   CARGA (LON bytes):  Datos de la capa superior, maximo 114 bytes.
+
+   CRC-16 (2 bytes):  CRC-16/CCITT-FALSE (polinomio 0x1021, valor
+      inicial 0xFFFF, sin reflejar), en orden de red, calculado sobre
+      todos los bytes anteriores de la trama.
+
+   La trama mide 12 + LON + 2 bytes, entre 14 y 128.
+
+2.4.  Direcciones fisicas
+
+   Una direccion fisica mide 4 bytes y se guarda en la EEPROM del Faro.
+   00:00:00:00 y FF:FF:FF:FF NO DEBEN usarse como direccion propia.
+
+   Las direcciones son rotables.  El nodo DEBERIA generar una nueva
+   con el generador criptografico del sistema operativo y fijarla en el
+   Faro (comandos FIJAR_DIRECCION o ROTAR_DIRECCION, Seccion 3).  La
+   biblioteca ofrece rotacion periodica con +/-20% de variacion
+   aleatoria en el intervalo, para que el momento del cambio no
+   identifique al dispositivo.
+
+   Con 4 bytes hay 2^32 direcciones.  En una red de decenas de Faros la
+   probabilidad de choque entre direcciones aleatorias es del orden de
+   n^2 / 2^33, despreciable, y cada trama ahorra 4 bytes frente a usar
+   6 como Ethernet.
+
+2.5.  Acceso al medio
+
+   El canal es semiduplex y un Faro no puede escuchar mientras
+   transmite, asi que no hay deteccion de colisiones.  Las colisiones
+   se evitan con CSMA/CA:
+
+   1.  Escucha de portadora: el canal esta ocupado si el decodificador
+       esta dentro de una trama o si ve intervalos Manchester validos
+       seguidos.  La luz ambiental no forma esos intervalos.
+
+   2.  Espera aleatoria de 0 a (ventana - 1) ranuras de 24 bits.  La
+       ventana empieza en 8 y se duplica en cada reintento, hasta 64.
+
+   3.  DIFS: el canal DEBE estar libre durante 32 bits seguidos antes
+       de transmitir.  Si en 3 s nunca queda libre, el Faro reporta
+       CANAL_OCUPADO.
+
+   4.  ACK: una trama unicast con PIDE_ACK se confirma con una trama
+       TIPO=ACK sin carga (14 bytes), enviada despues de un SIFS de 12
+       bits sin escuchar el canal.  Como SIFS < DIFS, el ACK tiene
+       prioridad sobre cualquier otra transmision.
+
+   5.  Si el ACK no llega en SIFS + 48 bits + la duracion de un ACK, la
+       trama se retransmite, hasta 3 veces por defecto (configurable de
+       0 a 7).
+
+   6.  El receptor recuerda los ultimos 8 pares (ORIGEN, SEQ).  Una
+       retransmision repetida se vuelve a confirmar, pero NO DEBE
+       entregarse dos veces al nodo.
+
+   Las tramas de difusion NO DEBEN pedir ACK.
+
+2.6.  Tramas armadas fuera del Faro
+
+   El nodo PUEDE entregar al Faro una trama completa, por ejemplo
+   construida con Scapy (adaptador/dispositivo_luz_adaptador/
+   scapy_faro.py), con el comando ENVIAR_CRUDA.  El Faro solo verifica
+   que la longitud sea coherente con LON y la transmite tal cual, sin
+   recalcular el CRC.  Esto permite probar versiones futuras del
+   protocolo sin cambiar el firmware.
+
+
+3.  Interfaz nodo-Faro (DispositivoLuzAdaptador)
+
+   El Faro se comunica con el nodo por USB-serial a 115200 baudios,
+   8N1.  Cada paquete es:
+
+      COBS( TIPO (1) | DATOS | CRC-16 (2) ) || 0x00
+
+   COBS elimina los bytes 0x00 del contenido, asi que 0x00 marca sin
+   ambiguedad el fin del paquete, y el receptor se resincroniza despues
+   de cualquier basura en la linea.  El nodo envia un comando a la vez y
+   espera la respuesta.  Los eventos pueden llegar en cualquier momento.
+
+   +------+-------------------+------------------------+--------------+
+   | Cod. | Comando           | Datos                  | Respuesta    |
+   +------+-------------------+------------------------+--------------+
+   | 0x01 | PING              | -                      | 0x81 PONG    |
+   | 0x02 | INFO              | -                      | 0x82 INFO    |
+   | 0x03 | ENVIAR            | destino(4) banderas    | 0x83         |
+   |      |                   | carga                  | RESULTADO_TX |
+   | 0x04 | ENVIAR_CRUDA      | trama completa         | 0x83         |
+   | 0x05 | FIJAR_DIRECCION   | direccion(4)           | 0x85         |
+   | 0x06 | ROTAR_DIRECCION   | -                      | 0x85         |
+   | 0x07 | CONFIGURAR        | bps(2) opciones        | 0x82 INFO    |
+   |      |                   | reintentos             |              |
+   | 0x08 | ESTADISTICAS      | -                      | 0x88         |
+   | 0x09 | REINICIAR_EST.    | -                      | 0x88         |
+   | 0x0A | GUARDAR_SECRETO   | 32 bytes               | 0x8A         |
+   | 0x0B | LEER_SECRETO      | -                      | 0x8B         |
+   | 0x0C | PANICO            | -                      | evento 0x8C  |
+   | 0x0D | SONDEAR           | -                      | 0x8D         |
+   | 0x0E | EMISOR_FIJO       | 0 o 1                  | 0x8D         |
+   +------+-------------------+------------------------+--------------+
+
+   Eventos: 0x90 TRAMA_RECIBIDA (crc_ok, trama) y 0x8C PANICO (nueva
+   direccion).  Errores: 0xFF seguido de un codigo (1 comando
+   desconocido, 2 longitud, 3 CRC del enlace serial, 4 parametro,
+   5 sin secreto).
+
+   Estados de transmision: 0 OK, 1 SIN_ACK, 2 CANAL_OCUPADO,
+   3 TRAMA_INVALIDA, 4 ABORTADO_PANICO.  Opciones: bit 0 = promiscuo,
+   bit 1 = entregar tramas con CRC malo (para medir el BER).
+
+   PONG incluye la version mayor y menor del firmware, la version del
+   protocolo de Capa 1 y el tamano maximo de trama, de modo que el nodo
+   DEBE verificar la compatibilidad antes de usar el Faro.
+
+   GUARDAR_SECRETO almacena en la EEPROM la semilla de identidad del
+   nodo (Seccion 4.1).  El boton de panico la borra (Seccion 9).
+
+
+4.  FaroNet: capas 2 y 3
+
+4.1.  Identidad de los nodos
+
+   Cada nodo tiene una semilla secreta de 32 bytes.  De ella derivan:
+
+   o  Una llave de firma Ed25519, que firma las entradas del
+      directorio.
+
+   o  Una llave "onion" X25519, con la que se negocian los circuitos y
+      se reciben los mensajes privados.
+
+   El ID de nodo es un hash BLAKE2b de 8 bytes de la llave publica de
+   firma.  La semilla PUEDE guardarse en un archivo (opcion --llave) o
+   en la EEPROM del Faro, donde el boton de panico la borra.
+
+   Toda la criptografia usa libsodium a traves de PyNaCl en los nodos y
+   WebCrypto en el Worker.  FaroNet NO DEFINE primitivas propias.
+
+4.2.  Celdas
+
+   Todas las celdas miden exactamente 512 bytes, para no filtrar la
+   longitud de los mensajes.
+
+    0       1       2       3       4             12            20
+   +-------+-------+-------+-------+-------------+-------------+
+   |  VER  |  CMD  |  TTL  |  RES  | DESTINO (8) | ORIGEN (8)  |
+   +-------+-------+-------+-------+-------------+-------------+
+   20            24      26
+   +-------------+-------+------------------------------------+
+   | CIRCUITO(4) |LON (2)| CUERPO (486 bytes)                 |
+   +-------------+-------+------------------------------------+
+
+   VER:  0x01.
+
+   CMD:  Comando (tabla abajo).
+
+   TTL:  Saltos restantes, 16 al crear la celda.  Un nodo que reenvia
+      una celda DEBE decrementarlo y DEBE descartarla si llega a 0.
+
+   RES:  Reservado, 0.
+
+   DESTINO, ORIGEN:  IDs de nodo de un solo tramo del circuito (por
+      ejemplo, del rele 1 al rele 2), nunca del mensaje de extremo a
+      extremo.  Las celdas que solo cruzan un enlace usan DESTINO en
+      ceros.
+
+   CIRCUITO:  Identificador del circuito en ese tramo, elegido al azar
+      por quien crea el tramo.
+
+   LON:  Cuantos bytes del CUERPO son significativos.  El resto es
+      relleno aleatorio.
+
+   +------+-------------+----------------------------------------------+
+   | CMD  | Nombre      | Uso                                          |
+   +------+-------------+----------------------------------------------+
+   | 0x01 | HOLA        | Presenta el ID del vecino (un solo enlace)   |
+   | 0x02 | RUTAS       | Anuncio del vector de distancias             |
+   | 0x03 | DIRECTORIO  | Una entrada firmada del directorio           |
+   | 0x04 | RELLENO     | Reservado para trafico de cobertura          |
+   | 0x10 | CREAR       | Primer paso del handshake de un tramo        |
+   | 0x11 | CREADA      | Respuesta del handshake                      |
+   | 0x12 | RELE_IDA    | Cuerpo onion del cliente hacia la salida     |
+   | 0x13 | RELE_VUELTA | Cuerpo onion de la salida hacia el cliente   |
+   | 0x14 | DESTRUIR    | Cierra un circuito en un tramo               |
+   | 0x15 | ENTREGA     | La salida entrega un sobre al destinatario   |
+   +------+-------------+----------------------------------------------+
+
+4.3.  Enlaces
+
+   Un enlace mueve celdas completas, en orden, a un vecino.
+
+   TCP (Ethernet, WiFi):  Las celdas se escriben una tras otra en el
+      flujo TCP.  Como todas miden 512 bytes, no hace falta
+      delimitarlas.
+      Costo del enlace: 1.
+
+   Faro:  Una celda no cabe en una trama, asi que se fragmenta.  Cada
+      fragmento viaja en la CARGA de una trama:
+
+      +-----------+--------+-------+--------------------------+
+      | ID_CELDA  | INDICE | TOTAL | DATOS (hasta 112 bytes)  |
+      | 1 byte    | 4 bits | 4 bits|                          |
+      +-----------+--------+-------+--------------------------+
+
+      Una celda ocupa 5 fragmentos.  Los fragmentos van unicast con ACK
+      a la ultima direccion fisica vista del otro Faro.  Como las
+      direcciones rotan, si no llega el ACK el fragmento se repite por
+      difusion.  Las celdas incompletas se descartan a los 30 s.  Si
+      una celda se pierde, los circuitos que la usaban se destruyen y
+      se reconstruyen.  Costo del enlace: 4.
+
+   Al abrir un enlace cada lado envia HOLA con su ID de nodo.
+
+4.4.  Enrutamiento dinamico
+
+   FaroNet usa un vector de distancias al estilo RIP.  Cada nodo envia
+   a sus vecinos, cada intervalo (10 s por defecto), celdas RUTAS con
+   pares (ID de destino de 8 bytes, metrica de 1 byte), hasta 53 por
+   celda.  La metrica es la suma de los costos de los enlaces; 16 es
+   infinito.
+
+   Se usa horizonte dividido con envenenamiento en reversa, y las rutas
+   que no se refrescan en 3 intervalos expiran.  Una celda con DESTINO
+   distinto del propio ID DEBE reenviarse por el enlace de la ruta de
+   menor metrica: "al siguiente dispositivo que esta mas cerca del
+   destino".
+
+4.5.  Directorio de nodos
+
+   Cada nodo publica una entrada firmada:
+
+   +-----+----+-------------+-------------+-------+-----------+--------+
+   | VER | ID | LLAVE FIRMA | LLAVE ONION | ROLES | PUBLICADA | EXPIRA |
+   | 1   | 8  | 32          | 32          | 1     | 4         | 4      |
+   +-----+----+-------------+-------------+-------+-----------+--------+
+   +---------+--------------+------------+
+   | LON_NOM | NOMBRE       | FIRMA      |
+   | 1       | LON_NOM      | 64         |
+   +---------+--------------+------------+
+
+   ROLES:  0x01 rele, 0x02 gateway.
+
+   PUBLICADA, EXPIRA:  Segundos desde 1970.  Una entrada dura 10
+      minutos.  Un nodo DEBE rechazar entradas que pidan mas de 1 hora
+      de vigencia o que esten fuera de una tolerancia de reloj de 5
+      minutos.
+
+   NOMBRE:  Seudonimo elegido por el nodo, hasta 32 bytes.
+
+   FIRMA:  Ed25519 sobre todos los bytes anteriores.  ID DEBE ser el ID
+      derivado de LLAVE FIRMA.
+
+   Las entradas se difunden por inundacion (celdas DIRECTORIO) con
+   supresion de duplicados, asi que cada nodo tiene su copia y no hay
+   un servidor central que pueda mentir: una entrada alterada no
+   verifica.  Las entradas NO DEBEN contener direcciones IP ni fisicas:
+   los nodos se alcanzan por ID usando las rutas de la mesh.
+
+4.6.  Circuitos virtuales
+
+   Un cliente elige de su directorio entre 3 y 5 reles al azar (3 por
+   defecto); el ultimo es la salida.  El circuito se negocia salto por
+   salto, de manera similar a Tor:
+
+   Cliente              Rele 1              Rele 2              Salida
+     | CREAR(x1)          |                   |                   |
+     |------------------->|                   |                   |
+     | CREADA(y1,auth1)   |                   |                   |
+     |<-------------------|                   |                   |
+     | RELE_IDA{EXTENDER(R2,x2)}              |                   |
+     |------------------->| CREAR(x2)         |                   |
+     |                    |------------------>|                   |
+     |                    | CREADA(y2,auth2)  |                   |
+     | RELE_VUELTA{EXTENDIDO}<----------------|                   |
+     |<-------------------|                   |                   |
+     |            ... lo mismo hasta la salida ...                 |
+
+   El handshake (tipo ntor) usa dos Diffie-Hellman X25519: efimera del
+   cliente con efimera del rele (secreto hacia adelante) y efimera del
+   cliente con la llave onion estatica del rele, publicada en el
+   directorio (autentica al rele).  Con BLAKE2b sobre los dos secretos y
+   el transcrito (ID del rele, llave onion, x, y) se derivan una llave
+   para cada sentido y un autenticador de 32 bytes.  Si el autenticador
+   no coincide, el cliente DEBE abortar el circuito.
+
+   Cada rele guarda solo un "tramo": el nodo anterior, el siguiente,
+   los IDs de circuito de cada lado y sus llaves.  Asi el primer rele
+   conoce al cliente pero no el destino, la salida conoce el destino
+   pero no al cliente, y el rele del medio no conoce a ninguno.  Un
+   tramo sin trafico se olvida a los 10 minutos.
+
+4.7.  Capas de la cebolla
+
+   El cuerpo de RELE_IDA y RELE_VUELTA se cifra con
+   XChaCha20-Poly1305 (AEAD) una vez por salto.  El nonce es un
+   contador por sentido: los enlaces entregan en orden y sin
+   duplicados, asi que no viaja en la celda.  Si una celda se pierde,
+   el siguiente descifrado falla y el circuito se destruye.
+
+   Cada capa agrega 16 bytes de etiqueta.  Para que la celda siga
+   midiendo lo mismo, cada salto quita su capa y completa con relleno
+   aleatorio nuevo:
+
+      salto p recibe:  [ cifrado para p   : 486-(p-1)*16 ][ relleno ]
+      salto p envia:   [ cifrado para p+1 : 486-p*16     ][ relleno ]
+
+   El relleno se renueva en cada salto, de modo que un observador no
+   puede seguir una celda comparando bytes.
+
+4.8.  Mensajes de rele
+
+   Texto en claro de una capa:
+
+   +-------------+---------+---------+-------------+----------+
+   | RECONOCIDO  | COMANDO | LON (2) | DATOS       | relleno  |
+   | 4 x 0x00    | 1       |         | LON bytes   |          |
+   +-------------+---------+---------+-------------+----------+
+
+   Si al quitar su capa un salto ve RECONOCIDO en ceros, el mensaje es
+   para el.  Si no, es el cifrado del siguiente salto.  (La
+   probabilidad de que un cifrado empiece con 4 ceros es 2^-32; en ese
+   caso el mensaje no se puede interpretar y el circuito se destruye.)
+
+   +------+-----------+----------------------------------------------+
+   | Cod. | Comando   | Datos                                        |
+   +------+-----------+----------------------------------------------+
+   | 0x01 | EXTENDER  | destino(8) | x(32) | posicion(1)             |
+   | 0x02 | EXTENDIDO | y(32) | auth(32)                             |
+   | 0x03 | ENTREGAR  | destinatario(8) | sobre(391)                 |
+   | 0x04 | ENTREGADO | estado(1): 0 OK, 1 sin ruta                  |
+   | 0x05 | ERROR     | codigo(1)                                    |
+   | 0x06 | PUBLICAR  | mensaje publico (391)                        |
+   | 0x07 | PUBLICADO | estado(1): 0 OK, 1 la salida no es gateway,  |
+   |      |           | 2 el edge rechazo o no respondio             |
+   +------+-----------+----------------------------------------------+
+
+   El sobre mide siempre 391 bytes: 486 - 5*16 (cinco capas como
+   maximo) - 7 (cabecera) - 8 (destinatario).
+
+
+5.  Capa 7 dentro de FaroNet
+
+5.1.  Mensajes privados
+
+   El texto en claro de un mensaje privado siempre mide 343 bytes:
+
+   +-----+------+---------+-----+-----------+-----------+
+   | VER | TIPO | CREADO  | TTL | LON_ALIAS | ALIAS     |
+   | 1   | 1    | 4       | 4   | 1         | LON_ALIAS |
+   +-----+------+---------+-----+-----------+-----------+
+   +-----+-------+-------------------------------------+
+   | LON | TEXTO | relleno (ceros hasta 343 bytes)     |
+   | 2   | LON   |                                     |
+   +-----+-------+-------------------------------------+
+
+   TIPO:  0x01 = privado.
+
+   CREADO, TTL:  Segundos desde 1970 y vida del mensaje en segundos.
+
+   Se cierra con SealedBox de libsodium (X25519 + XSalsa20-Poly1305)
+   hacia la llave onion del destinatario, tomada del directorio.  El
+   sobre resultante mide 343 + 48 = 391 bytes.
+
+   El cliente lo envia con ENTREGAR por un circuito.  La salida lo
+   reenvia en una celda ENTREGA al destinatario por la ruta normal de
+   la mesh.  Ningun rele puede leerlo: solo el destinatario tiene la
+   llave privada.  ALIAS es un seudonimo opcional; FaroNet no agrega
+   ninguna identidad del remitente.
+
+   Los mensajes privados residen unicamente dentro de FaroNet: un
+   gateway NO DEBE publicarlos en el edge.  El destinatario los guarda
+   solo en memoria y los descarta al vencer su TTL (24 horas por
+   defecto).
+
+5.2.  Mensajes publicos
+
+   Un mensaje publico tambien mide 391 bytes, rellenado con ceros:
+
+   +-----+----------+------+-----------+-------+-----+-------+---------+
+   | VER | LON_TEMA | TEMA | LON_ALIAS | ALIAS | LON | TEXTO | relleno |
+   | 1   | 1        |      | 1         |       | 2   |       | ceros   |
+   +-----+----------+------+-----------+-------+-----+-------+---------+
+
+   TEMA:  Minusculas, numeros y guiones, hasta 32 caracteres.
+
+   TEXTO:  Hasta 500 caracteres (limite del edge).
+
+   El cliente construye un circuito cuya salida es un nodo con el rol
+   gateway y le envia PUBLICAR.  El gateway lo sube al edge (Seccion
+   6.1) y responde PUBLICADO.  El gateway ve el texto, el tema y el
+   alias, que de todas formas seran publicos, pero no sabe quien lo
+   origino.
+
+
+6.  Capa 7 en el edge
+
+   La aplicacion publica corre en Cloudflare Workers (plan gratuito)
+   con Durable Objects.  El despliegue es reproducible con
+   "npx wrangler deploy" y el archivo worker/wrangler.toml del
+   repositorio, que no contiene secretos.
+
+   +--------+-------------------------+-------------------------------+
+   | Metodo | Ruta                    | Funcion                       |
+   +--------+-------------------------+-------------------------------+
+   | GET    | /                       | Pagina con las salas activas  |
+   | GET    | /salas/:tema            | Sala en vivo (WebSocket)      |
+   | GET    | /salas/:tema/ws         | WebSocket de la sala          |
+   | GET    | /salas/:tema/feed.xml   | Feed Atom [RFC4287]           |
+   | GET    | /salas/:tema/mensajes   | Mensajes recientes (JSON)     |
+   | GET    | /api/salas              | Salas activas                 |
+   | GET    | /api/directorio         | Replica del directorio        |
+   | PUT    | /api/buzon/:id?ttl=SEG  | Deposita un blob              |
+   | GET    | /api/buzon/:id          | Retira un blob (se borra)     |
+   | POST   | /api/gateway/publicar   | Firmado: publica un mensaje   |
+   | POST   | /api/gateway/directorio | Firmado: sube el directorio   |
+   +--------+-------------------------+-------------------------------+
+
+6.1.  Relay del gateway
+
+   El gateway habla con el Worker por HTTPS.  Cada peticion lleva:
+
+      X-Faronet-Gateway: llave publica Ed25519 del gateway (hex)
+      X-Faronet-Tiempo:  milisegundos desde 1970 (decimal)
+      X-Faronet-Firma:   firma Ed25519 (hex) de
+
+         "faronet-edge-v1" LF METODO LF RUTA LF TIEMPO LF
+         hex(SHA-256(cuerpo))
+
+   El Worker DEBE verificar que la llave este en la lista GATEWAYS, que
+   TIEMPO este a menos de 60 s de su reloj, que la firma sea valida y
+   que TIEMPO sea estrictamente mayor que el ultimo aceptado de ese
+   gateway (guardado en el Durable Object Central).  Asi una peticion
+   capturada no se puede repetir (replay) ni alterar.
+
+   El gateway usa como llave de firma la misma identidad Ed25519 de su
+   nodo FaroNet, y sube todas las entradas de su directorio cada 5
+   minutos.
+
+6.2.  Salas publicas y feeds
+
+   Cada tema es un Durable Object con almacenamiento SQLite.  Los
+   navegadores se conectan por WebSocket y reciben el historial y luego
+   cada mensaje nuevo en tiempo real.  Las salas son de solo lectura
+   desde Internet: solo un gateway autorizado publica.  Guardan como
+   maximo 200 mensajes y 7 dias.  Cada mensaje nuevo aparece tambien
+   en el feed Atom de su tema.
+
+6.3.  Buzon muerto
+
+   Dos personas que comparten un secreto de 32 bytes derivan, fuera
+   del Worker y con BLAKE2b con distinto contexto, un identificador
+   opaco de buzon y una llave.  El texto se cifra con SecretBox
+   (XSalsa20-Poly1305) y se rellena a un blob de 1024 bytes.
+
+   El Worker solo ve el identificador y 1024 bytes cifrados.  El TTL va
+   de 1 minuto a 72 horas (24 horas por defecto).  La lectura es unica
+   y atomica: el blob se borra al ser leido, y dos lectores nunca
+   reciben el mismo blob.  Si el identificador ya esta ocupado, el
+   deposito se rechaza.
+
+6.4.  Directorio publico
+
+   El Worker verifica la firma Ed25519 de cada entrada que sube un
+   gateway y publica los bytes originales (en base64) junto con los
+   campos decodificados, para que cualquiera pueda volver a verificar
+   la firma.  Las entradas vencidas se eliminan.
+
+6.5.  Limite de peticiones y politica de no registro
+
+   Cada cliente puede hacer 60 peticiones por minuto, con el limitador
+   de Cloudflare (o un contador en memoria si la cuenta no lo ofrece).
+   La clave del limite es SHA-256(fecha | clase | IP): la IP no se
+   guarda.
+
+   El codigo del Worker NO DEBE persistir ni escribir en registros las
+   cabeceras CF-Connecting-IP, User-Agent ni otras del visitante, y la
+   observabilidad de Workers esta desactivada en wrangler.toml.  Las
+   paginas usan una politica de seguridad de contenido (CSP) estricta.
+
+
+7.  Versionado
+
+   Todos los formatos empiezan con un byte de version y todos los
+   campos de largo variable tienen su largo en un campo aparte:
+
+   +--------------------+---------+-------------------------------+
+   | Formato            | Version | Campo de largo                |
+   +--------------------+---------+-------------------------------+
+   | Trama del Faro     | 0x01    | LON                           |
+   | Celda              | 0x01    | LON                           |
+   | Entrada directorio | 0x01    | LON_NOMBRE                    |
+   | Mensaje privado    | 0x01    | LON_ALIAS, LON                |
+   | Mensaje publico    | 0x01    | LON_TEMA, LON_ALIAS, LON      |
+   | Mensaje de rele    | -       | LON                           |
+   | Firma del edge     | "v1"    | (contexto "faronet-edge-v1")  |
+   +--------------------+---------+-------------------------------+
+
+   En toda version futura de la trama del Faro, VERSION y LON DEBEN
+   seguir siendo los bytes 0 y 1, y la trama DEBE medir 12 + LON + 2
+   bytes.  Asi cualquier receptor sabe donde termina una trama aunque
+   no entienda su version.  Un receptor DEBE descartar celdas,
+   entradas y mensajes de versiones desconocidas.
+
+
+8.  Modelo de amenazas
+
+   Objetivo: ningun adversario individual DEBE poder saber a la vez
+   quien envia un mensaje y a quien (o que el remitente es el autor de
+   un mensaje publico).
+
+   Para cada adversario: que puede ver (V), que no debe ver (N) y la
+   mitigacion (M).
+
+   Nodo malicioso de la mesh:
+      V: su vecino anterior y siguiente, la hora y la cantidad de
+         celdas.
+      N: el origen y el destino a la vez; el contenido.
+      M: circuitos de 3 a 5 saltos; celdas de 512 bytes; relleno
+         aleatorio nuevo en cada salto; cifrado de extremo a extremo.
+
+   Observador del medio fisico (luz):
+      V: que hay transmision, cuando, el tamano de cada trama y las
+         direcciones fisicas actuales.
+      N: el contenido; el seguimiento de un Faro a lo largo del
+         tiempo.
+      M: cifrado por capas y de extremo a extremo; rotacion de la
+         direccion fisica con intervalo aleatorio.
+
+   Operador del gateway:
+      V: los mensajes publicos que salen, su hora, tema y alias.
+      N: el autor de los mensajes publicos; los mensajes privados.
+      M: los privados nunca salen de FaroNet; el gateway es la salida
+         de un circuito y no conoce al cliente.
+
+   Proveedor del edge (Cloudflare):
+      V: la IP del gateway y de los navegadores, las horas, los
+         tamanos y las rutas de las peticiones (incluido el
+         identificador del buzon).
+      N: el contenido del buzon; quien origino un mensaje dentro de
+         FaroNet.
+      M: blobs cifrados de tamano fijo con TTL; el Worker no guarda IP
+         ni User-Agent; la clave del limite de peticiones es un hash.
+
+   Ladron del Faro:
+      V: la EEPROM y la memoria del Faro.
+      N: las llaves y la identidad, si se activo el panico.
+      M: boton de panico que borra el secreto y cambia la direccion.
+
+   Fuera de alcance:
+
+   o  Un adversario global que observe al mismo tiempo la entrada y la
+      salida de un circuito puede correlacionar por tiempo.  FaroNet no
+      agrega retardos ni trafico de cobertura (RELLENO esta reservado
+      para eso).
+
+   o  Varios reles maliciosos que colaboren y sean el primero y el
+      ultimo salto de un mismo circuito.
+
+   o  Ataques Sybil: cualquiera puede publicar muchas entradas en el
+      directorio.
+
+   o  Un adversario con acceso al puerto USB del Faro antes del panico.
+
+
+9.  Consideraciones de privacidad
+
+   Esta seccion sigue las categorias de RFC 6973.
+
+   Vigilancia:  Las celdas tienen tamano fijo y los reles renuevan el
+      relleno en cada salto, asi que un observador no aprende el largo
+      de los mensajes ni puede seguir una celda comparando bytes.  En
+      el medio optico toda celda produce la misma secuencia de 5
+      fragmentos (4 de 112 bytes de datos y 1 de 64), asi que el largo
+      de las tramas no revela el largo del mensaje.
+
+   Datos almacenados:  Ningun componente DEBE guardar bitacoras con
+      direcciones IP, direcciones fisicas o identificadores de usuario.
+      Los nodos no escriben nada a disco salvo la semilla (si se usa
+      --llave); los mensajes recibidos viven en memoria con TTL.  El
+      Faro solo guarda contadores y una tabla de 8 duplicados en RAM.
+      El Worker guarda mensajes publicos (200 por sala, 7 dias),
+      blobs del buzon (TTL de hasta 72 horas, borrados al leerse) y el
+      directorio (10 minutos por entrada).
+
+   Correlacion:  La direccion fisica del Faro rota con un intervalo
+      aleatorio.  El ID de nodo no aparece en el medio optico salvo
+      dentro de las celdas, y las celdas solo llevan IDs de un tramo.
+      Los IDs de circuito se eligen al azar en cada tramo.
+
+   Identificacion:  El remitente no se identifica ante ningun rele ni
+      ante el destinatario.  El ALIAS es opcional y elegido por el
+      remitente.  Los nombres del directorio son seudonimos.
+
+   Uso secundario:  El edge no tiene datos de usuarios que reutilizar:
+      el limite de peticiones usa un hash de la IP con la fecha y no lo
+      persiste.
+
+   Divulgacion:  Los mensajes privados solo los puede abrir el
+      destinatario (SealedBox).  El contenido del buzon muerto solo lo
+      abre quien tenga el secreto.
+
+   Exclusion:  Cualquier persona puede retirar su nodo del directorio
+      dejando de publicarlo: la entrada vence en 10 minutos.
+
+   Boton de panico:  Al presionarlo, el Faro DEBE sobrescribir el
+      secreto de la EEPROM (primero con 0xFF y luego con 0x00), generar
+      una direccion fisica nueva, borrar los buffers, las estadisticas
+      y la tabla de duplicados, enviar el evento PANICO e indicarlo
+      visualmente (los LEDs parpadean y el LED rojo queda encendido).
+      El nodo, al recibirlo (o con el comando "panico" de la consola),
+      DEBE borrar sus llaves, circuitos, rutas,
+      directorio y buzon, y detenerse.
+
+   Riesgo que se acepta: el proveedor del edge sigue viendo los
+   metadatos de red (IP, hora, tamano y ruta de cada peticion) aunque
+   el Worker no los guarde, y puede tener sus propios registros.  Nunca
+   ve quien origino un mensaje dentro de FaroNet: solo ve al gateway.
+
+
+10.  Consideraciones de seguridad
+
+   Integridad en la Capa 1:  El CRC-16 detecta errores accidentales, no
+      manipulacion.  Cualquiera con un LED infrarrojo puede inyectar
+      tramas validas con cualquier direccion de origen.  La
+      autenticidad se resuelve en FaroNet con AEAD por salto, firmas
+      Ed25519 en el directorio y SealedBox de extremo a extremo.
+
+   Negacion de servicio en el medio:  Un atacante puede saturar el
+      canal con luz modulada, y el Faro reportara CANAL_OCUPADO.  No hay
+      mitigacion en la Capa 1.
+
+   Autenticacion de reles:  El handshake prueba que el rele conoce la
+      llave onion que publico en el directorio.  Un rele que no la
+      conozca no puede completar el circuito.
+
+   Secreto hacia adelante:  Las llaves de cada tramo salen de un
+      Diffie-Hellman entre llaves efimeras, que se descartan al cerrar
+      el circuito.
+
+   Reproduccion y reordenamiento:  Los contadores de nonce de cada capa
+      hacen que una celda repetida, reordenada o perdida rompa el
+      descifrado y destruya el circuito.  En el edge, la marca de
+      tiempo estrictamente creciente impide repetir peticiones firmadas.
+
+   Directorio:  Una entrada alterada no verifica.  Las entradas vencen
+      en 10 minutos y se rechazan las que tienen fechas fuera de una
+      tolerancia de 5 minutos, para limitar entradas viejas.  El
+      directorio no evita ataques Sybil.
+
+   Gateway:  Solo las llaves de la lista GATEWAYS del Worker pueden
+      publicar.  Si la llave de un gateway se filtra, hay que quitarla
+      de la lista y volver a desplegar.
+
+   Secreto del Faro:  LEER_SECRETO entrega la semilla a quien tenga
+      acceso al puerto USB.  Se asume que el nodo conectado es de
+      confianza.  El secreto protege contra el robo del Faro despues de
+      presionar el panico, no antes.  La direccion que el Faro genera
+      tras un panico usa un generador no criptografico (xorshift con
+      semilla de ruido analogico), suficiente para romper la asociacion
+      con la direccion anterior; las rotaciones normales las hace el
+      nodo con un generador criptografico.
+
+   Abuso del edge:  El limite de 60 peticiones por minuto, el tamano
+      maximo de los mensajes, la cantidad maxima de blobs del buzon y
+      los TTL acotan el abuso de recursos.
+
+
+11.  Consideraciones de IANA
+
+   Este documento no requiere acciones de IANA.  Los puertos TCP de los
+   nodos son configurables (9101 por convencion en el codigo de
+   referencia).
+
+
+12.  Referencias
+
+12.1.  Referencias normativas
+
+   [RFC2119]  Bradner, S., "Key words for use in RFCs to Indicate
+              Requirement Levels", BCP 14, RFC 2119, Marzo 1997.
+
+   [RFC8174]  Leiba, B., "Ambiguity of Uppercase vs Lowercase in RFC
+              2119 Key Words", BCP 14, RFC 8174, Mayo 2017.
+
+   [RFC8032]  Josefsson, S. y I. Liusvaara, "Edwards-Curve Digital
+              Signature Algorithm (EdDSA)", RFC 8032, Enero 2017.
+
+   [RFC7748]  Langley, A., Hamburg, M. y S. Turner, "Elliptic Curves
+              for Security", RFC 7748, Enero 2016.
+
+   [RFC7693]  Saarinen, M-J. y J-P. Aumasson, "The BLAKE2
+              Cryptographic Hash and Message Authentication Code
+              (MAC)", RFC 7693, Noviembre 2015.
+
+   [RFC4287]  Nottingham, M. y R. Sayre, "The Atom Syndication
+              Format", RFC 4287, Diciembre 2005.
+
+12.2.  Referencias informativas
+
+   [RFC6973]  Cooper, A., et al., "Privacy Considerations for Internet
+              Protocols", RFC 6973, Julio 2013.
+
+   [RFC7322]  Flanagan, H. y S. Ginoza, "RFC Style Guide", RFC 7322,
+              Septiembre 2014.
+
+   [RFC9110]  Fielding, R., Nottingham, M. y J. Reschke, "HTTP
+              Semantics", STD 97, RFC 9110, Junio 2022.
+
+   [RFC1058]  Hedrick, C., "Routing Information Protocol", RFC 1058,
+              Junio 1988.
+
+   [TOR]      Dingledine, R., Mathewson, N. y P. Syverson, "Tor: The
+              Second-Generation Onion Router", USENIX Security
+              Symposium, 2004.
+
+   [NTOR]     Goldberg, I., Stebila, D. y B. Ustaoglu, "Anonymity and
+              one-way authentication in key exchange protocols",
+              Designs, Codes and Cryptography, 2013.
+
+   [XCHACHA]  Arciszewski, S., "XChaCha: eXtended-nonce ChaCha and
+              AEAD_XChaCha20_Poly1305", draft-irtf-cfrg-xchacha, 2020.
+
+   [COBS]     Cheshire, S. y M. Baker, "Consistent Overhead Byte
+              Stuffing", IEEE/ACM Transactions on Networking, 1999.
+
+   [LIBSODIUM] "libsodium documentation", https://doc.libsodium.org.
+
+   [WORKERS]  Cloudflare, "Cloudflare Workers documentation",
+              https://developers.cloudflare.com/workers/.
+
+
+Apendice A.  Constantes
+
+   +------------------------------------------+----------------------+
+   | Constante                                | Valor                |
+   +------------------------------------------+----------------------+
+   | Velocidad del Faro (defecto / rango)     | 2000 / 500-20000 b/s |
+   | Trama: maximo / carga maxima             | 128 / 114 bytes      |
+   | Reintentos por defecto (rango)           | 3 (0 a 7)            |
+   | Ranura / SIFS / DIFS                     | 24 / 12 / 32 bits    |
+   | Ventana de contencion                    | 8 a 64 ranuras       |
+   | Serial nodo-Faro                         | 115200 8N1, COBS     |
+   | Celda / cabecera / cuerpo                | 512 / 26 / 486 bytes |
+   | TTL inicial de una celda                 | 16                   |
+   | ID de nodo                               | 8 bytes              |
+   | Fragmentos por celda en el Faro          | 5 (112 bytes c/u)    |
+   | Costo TCP / Faro                         | 1 / 4                |
+   | Metrica infinita                         | 16                   |
+   | Saltos por circuito                      | 3 a 5 (3 por defecto)|
+   | Sobre (privado y publico)                | 391 bytes            |
+   | Texto en claro del mensaje privado       | 343 bytes            |
+   | Vigencia de una entrada del directorio   | 10 min (max. 1 h)    |
+   | TTL de mensajes privados                 | 24 h                 |
+   | Blob del buzon / TTL                     | 1024 B / 1 min-72 h  |
+   | Ventana de la firma del gateway          | 60 s                 |
+   | Subida del directorio al edge            | cada 5 min           |
+   | Limite de peticiones                     | 60 por minuto        |
+   +------------------------------------------+----------------------+
+
+
+Apendice B.  Medicion de tasa y BER
+
+   Procedimiento: dos Faros enfrentados, con luz ambiental normal, a
+   tres distancias.  El Faro emisor envia N tramas de carga conocida;
+   el receptor, con la opcion "entregar tramas con CRC malo", compara
+   bit a bit.
+
+      tasa efectiva = bits de carga recibidos correctamente / tiempo
+      BER           = bits erroneos / bits recibidos
+
+   +-----------+-------------+----------------+---------+
+   | Distancia | Velocidad   | Tasa efectiva  | BER     |
+   +-----------+-------------+----------------+---------+
+   | (por      | (por medir) | (por medir)    | (por    |
+   |  medir)   |             |                |  medir) |
+   +-----------+-------------+----------------+---------+
+
+   Los resultados se completan con los Faros soldados.
+
+
+Direcciones de los autores
+
+   David Zamora
+   Instituto Tecnologico de Costa Rica
+   Escuela de Computacion
+
+   Diego Zamora
+   Instituto Tecnologico de Costa Rica
+   Escuela de Computacion
