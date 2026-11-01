@@ -31,6 +31,8 @@ from faronet.cripto import Identidad
 CONTEXTO = "faronet-edge-v1"
 BLOB = 1024
 BUZON_CLARO = BLOB - SecretBox.NONCE_SIZE - SecretBox.MACBYTES - 2  # 982 bytes de texto
+# Cloudflare rechaza (error 1010) el User-Agent por defecto "Python-urllib".
+AGENTE = "faronet-gateway/0.1"
 
 
 class ErrorEdge(RuntimeError):
@@ -41,7 +43,8 @@ class ErrorEdge(RuntimeError):
 
 def _pedir(metodo: str, url: str, cuerpo: bytes | None = None, cabeceras: dict | None = None,
            timeout: float = 15.0) -> tuple[int, bytes]:
-    req = urllib.request.Request(url, data=cuerpo, method=metodo, headers=cabeceras or {})
+    req = urllib.request.Request(url, data=cuerpo, method=metodo,
+                                 headers={"User-Agent": AGENTE, **(cabeceras or {})})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.status, r.read()
