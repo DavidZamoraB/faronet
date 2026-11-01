@@ -57,6 +57,7 @@ Tabla de contenido
    5.  Capa 7 dentro de FaroNet
      5.1.  Mensajes privados
      5.2.  Mensajes publicos
+     5.3.  Temas privados
    6.  Capa 7 en el edge
      6.1.  Relay del gateway
      6.2.  Salas publicas y feeds
@@ -605,7 +606,9 @@ Tabla de contenido
    | 2   | LON   |                                     |
    +-----+-------+-------------------------------------+
 
-   TIPO:  0x01 = privado.
+   TIPO:  0x01 = privado; 0x02 = mensaje de un tema privado.  Con
+      TIPO 0x02, despues de ALIAS van LON_TEMA (1 byte) y TEMA
+      (Seccion 5.3).
 
    CREADO, TTL:  Segundos desde 1970 y vida del mensaje en segundos.
 
@@ -642,6 +645,26 @@ Tabla de contenido
    6.1) y responde PUBLICADO.  El gateway ve el texto, el tema y el
    alias, que de todas formas seran publicos, pero no sabe quien lo
    origino.
+
+
+5.3.  Temas privados
+
+   Un tema privado reside unicamente dentro de FaroNet.  Quien lo crea
+   guarda en memoria la lista de sus miembros (nombres o IDs del
+   directorio).  Cada mensaje del tema se envia a cada miembro como un
+   mensaje privado (Seccion 5.1) con TIPO 0x02, por un circuito propio
+   y sellado hacia la llave de ese miembro.  El nombre del tema viaja
+   dentro del sobre, asi que ni los reles ni el gateway lo ven, y el
+   sobre mide los mismos 391 bytes.
+
+   Un nodo NO DEBE publicar con PUBLICAR un tema que tenga marcado como
+   privado.  La lista de miembros NO DEBE escribirse a disco, y el
+   boton de panico la borra.
+
+   Costo: un tema con n miembros produce n circuitos, y cada miembro
+   recibe el mensaje en un momento distinto.  Un observador que vea
+   varios destinos recibir mensajes en rafaga podria sospechar que son
+   del mismo tema (ver Seccion 8).
 
 
 6.  Capa 7 en el edge
@@ -741,7 +764,7 @@ Tabla de contenido
    | Trama del Faro     | 0x01    | LON                           |
    | Celda              | 0x01    | LON                           |
    | Entrada directorio | 0x01    | LON_NOMBRE                    |
-   | Mensaje privado    | 0x01    | LON_ALIAS, LON                |
+   | Mensaje privado    | 0x01    | LON_ALIAS, LON_TEMA, LON      |
    | Mensaje publico    | 0x01    | LON_TEMA, LON_ALIAS, LON      |
    | Mensaje de rele    | -       | LON                           |
    | Firma del edge     | "v1"    | (contexto "faronet-edge-v1")  |
