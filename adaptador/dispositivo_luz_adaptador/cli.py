@@ -27,7 +27,7 @@ def _si_no(texto: str) -> bool:
 
 def construir_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="faro", description="Cliente del Faro (DispositivoLuzAdaptador)")
-    p.add_argument("-p", "--puerto", required=True, help="puerto serial, p. ej. /dev/ttyUSB0")
+    p.add_argument("-p", "--puerto", required=True, help="puerto serial (p. ej. /dev/ttyUSB0) o \"gpio\" para un Faro manejado por una Raspberry Pi")
     p.add_argument("-b", "--baudios", type=int, default=115200)
     sub = p.add_subparsers(dest="comando", required=True)
 
