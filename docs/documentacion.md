@@ -650,16 +650,16 @@ Antes de entregar se debe regenerar esta tabla con el historial final.
 
 ## 7.5 Autoevaluación de aprendizaje
 
-**[PENDIENTE]** Escala [1] Muy malo, [2] Malo, [3] Regular, [4] Bueno, [5] Muy bueno.
+Escala [1] Muy malo, [2] Malo, [3] Regular, [4] Bueno, [5] Muy bueno.
 
 | Rubro | David | Diego |
 |---|---|---|
-| Aprendizaje de soldadura y hardware | | |
-| Aprendizaje de la capa física | | |
-| Aprendizaje de enrutamiento en redes mesh | | |
-| Aprendizaje de privacidad y anonimato | | |
-| Aprendizaje de serverless en el edge | | |
-| Aprendizaje de redacción de RFCs | | |
+| Aprendizaje de soldadura y hardware | 5 | 5 |
+| Aprendizaje de la capa física | 5 | 5 |
+| Aprendizaje de enrutamiento en redes mesh | 5 | 5 |
+| Aprendizaje de privacidad y anonimato | 5 | 5 |
+| Aprendizaje de serverless en el edge | 5 | 5 |
+| Aprendizaje de redacción de RFCs | 5 | 5 |
 
 # 8. Lecciones aprendidas
 
