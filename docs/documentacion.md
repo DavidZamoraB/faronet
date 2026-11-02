@@ -9,11 +9,12 @@ date: "Noviembre, 2026"
 lang: es
 ---
 
-> **Estado de este documento.** Versión del 2 de noviembre de 2026, escrita a
-> partir de `main` (commit `b1d3ada`). Los puntos marcados como
-> **[PENDIENTE]** son trabajo que todavía no está hecho o datos que solo el
-> equipo puede llenar (horas, autoevaluación, mediciones). No se reportan
-> resultados que no se hayan medido.
+> **Estado de este documento.** Versión del 2 de noviembre de 2026. Los
+> puntos marcados como **[PENDIENTE]** son trabajo que todavía no está hecho
+> o datos que solo el equipo puede llenar (horas, autoevaluación). Las
+> pruebas Faro contra Faro y las mediciones de tasa y BER a distintas
+> distancias **no se pudieron realizar** antes de la entrega (sección 7.1); no
+> se reportan resultados que no se hayan medido.
 
 # 1. Introducción
 
@@ -68,9 +69,9 @@ siguiente:
 | Fase | Contenido | Estado |
 |---|---|---|
 | 0 | Aprendizaje base (electrónica, Arduino, sockets, criptografía) | Hecho |
-| 1 | Prototipo del Faro en protoboard, luz entre dos Faros | Hecho (cada Faro por separado) |
-| 2 | Capa 1: trama, CRC, acceso al medio, medición de tasa y BER | Protocolo hecho; medición **[PENDIENTE]** |
-| 3 | Faro soldado en placa perforada, pruebas de multímetro | En curso |
+| 1 | Prototipo del Faro en protoboard, luz entre dos Faros | Cada Faro probado por separado; entre dos Faros **no realizado** |
+| 2 | Capa 1: trama, CRC, acceso al medio, medición de tasa y BER | Protocolo hecho; medición **no realizada** |
+| 3 | Faro soldado en placa perforada, pruebas de multímetro | Dos placas soldadas parcialmente (fotos en 3.1) |
 | 4 | Mesh FaroNet: directorio, ruteo, onion routing | Hecho |
 | 5 | Gateway (Raspberry Pi) y Cloudflare Workers | Hecho y desplegado |
 | 6 | RFC, documentación y ensayo de la defensa | RFC hecho; este documento |
@@ -197,12 +198,29 @@ KiCad están en `hardware/esquematico.md`. **[PENDIENTE]** el proyecto KiCad en
 
 **Placa perforada.** El circuito se suelda en placa perforada con zócalo
 DIP-8 para el LM393 y headers hembra para retirar el Arduino sin desoldar
-(`hardware/placa_perforada.md`). Al 2 de noviembre el Faro de David
-(placa HS-03) tiene terminadas y probadas con multímetro las etapas de
-alimentación (3A: rieles de 5 V y tierra, sin corto), divisor de umbral (3B)
-y se está soldando el receptor (3C); falta el emisor (etapa 4).
-**[PENDIENTE]** fotos de ambas caras (`hardware/fotos/`) y la bitácora de
-multímetro llena para cada Faro (`hardware/bitacora_pruebas.md`).
+(`hardware/placa_perforada.md`). Se soldaron dos Faros en placas HS-03
+(9 × 14,5 cm). Las fotos de ambas caras están en `hardware/fotos/` y se
+muestran abajo (tomadas el 1 de noviembre de 2026).
+
+* **Faro 1**: tiene montados el header para el Arduino, C2, el LM393 en su
+  zócalo, C1, las resistencias del emisor y del receptor, el 2N2222A, el LED
+  IR y el receptor, el botón de pánico y los LEDs indicadores.
+* **Faro 2** (David): terminadas y probadas con multímetro las etapas de
+  alimentación (3A: rieles de 5 V y tierra, sin corto) y divisor de umbral
+  (3B); en la foto ya están el zócalo DIP-8 (todavía sin el LM393), C1, las
+  resistencias y LEDs indicadores y el receptor. Falta terminar el receptor
+  (3C) y soldar el emisor (etapa 4).
+
+**[PENDIENTE]** la bitácora de multímetro llena para cada Faro
+(`hardware/bitacora_pruebas.md`).
+
+| Faro 1: componentes | Faro 1: cobre |
+|---|---|
+| ![](../hardware/fotos/faro1-componentes.jpg){width=100%} | ![](../hardware/fotos/faro1-cobre.jpg){width=100%} |
+
+| Faro 2: componentes | Faro 2: cobre |
+|---|---|
+| ![](../hardware/fotos/faro2-componentes.jpg){width=100%} | ![](../hardware/fotos/faro2-cobre.jpg){width=100%} |
 
 **BOM.** `hardware/bom.md`: ≈ ₡10 675 por Faro y ≈ ₡26 910 para los dos Faros
 más materiales compartidos (precios aproximados de octubre de 2026; se deben
@@ -554,16 +572,24 @@ las sesiones de trabajo registradas; las horas están en blanco a propósito.
 | Firmware del Faro | Completo; compila para Nano y Uno; núcleo probado en la PC |
 | Biblioteca DispositivoLuzAdaptador | Completa, con simulador, Scapy y comandos de medición; 22 pruebas pasan |
 | Faro en protoboard | Funciona por separado en ambos Faros (recepción con LED propio y hoja / frente a frente) |
-| Faro soldado | En curso (Faro de David: etapas 3A–3B listas, 3C en curso, falta emisor) |
-| Prueba Faro contra Faro | **[PENDIENTE]** |
-| Tasa efectiva y BER a 3 distancias | **[PENDIENTE]** (procedimiento y herramienta listos: `faro medir`) |
-| Esquemático KiCad, fotos, bitácora de multímetro | **[PENDIENTE]** (esquemático y netlist en Markdown sí existen) |
+| Faro soldado | Dos placas soldadas parcialmente (fotos en la sección 3.1); el Faro 2 no tiene todavía el emisor |
+| Prueba Faro contra Faro | **No realizada** |
+| Tasa efectiva y BER a 3 distancias | **No realizada**. El procedimiento (Apéndice B del RFC) y la herramienta (`faro medir`) están listos, pero no hay resultados |
+| Esquemático KiCad, bitácora de multímetro | **[PENDIENTE]** (esquemático y netlist en Markdown sí existen; las fotos ya están) |
 | Mesh: ruteo, directorio, onion, mensajes privados, temas privados | Completa; 28 pruebas pasan (incluye red de 6 nodos y red que cruza dos Faros simulados) |
 | Autenticación de `HOLA` y tráfico de relleno | **[PENDIENTE]** |
 | Gateway y Worker | Completos y desplegados en <https://faronet.faronet-worker.workers.dev> |
-| RFC | Completo (`docs/rfc-faronet.txt`); falta llenar la tabla de mediciones del Apéndice B |
+| RFC | Completo (`docs/rfc-faronet.txt`); el Apéndice B indica que las mediciones no se realizaron |
 
 ## 7.2 Problemas encontrados y limitaciones
+
+* **No se pudieron hacer las pruebas Faro contra Faro ni las mediciones de
+  tasa efectiva y BER a tres distancias** que pide el enunciado. Cada Faro
+  se probó solo (emisión y recepción con su propio LED y una hoja, o frente
+  a frente a 1 cm), pero no se llegó a comunicar dos Faros entre sí. Por eso
+  no hay datos de velocidad ni de BER, el enlace por luz entre comunidades
+  solo se probó con Faros simulados (pruebas de `nodo/`) y no se compite por
+  el extra de mayor tasa de transferencia.
 
 * El trimpot del kit no variaba el voltaje: se reemplazó por un divisor fijo.
 * El sensor del Faro de David es débil (probablemente un fotodiodo y no un

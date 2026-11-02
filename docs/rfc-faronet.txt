@@ -1043,14 +1043,11 @@ Apendice B.  Medicion de tasa y BER
       tasa efectiva = bits de carga recibidos correctamente / tiempo
       BER           = bits erroneos / bits recibidos
 
-   +-----------+-------------+----------------+---------+
-   | Distancia | Velocidad   | Tasa efectiva  | BER     |
-   +-----------+-------------+----------------+---------+
-   | (por      | (por medir) | (por medir)    | (por    |
-   |  medir)   |             |                |  medir) |
-   +-----------+-------------+----------------+---------+
-
-   Los resultados se completan con los Faros soldados.
+   Estado: estas mediciones NO se realizaron.  Cada Faro se probo por
+   separado, pero no se llego a comunicar dos Faros entre si antes de
+   la entrega, asi que no hay resultados de tasa efectiva ni de BER.
+   La herramienta ("faro medir emisor" y "faro medir receptor") esta
+   implementada en la biblioteca DispositivoLuzAdaptador.
 
 
 Direcciones de los autores

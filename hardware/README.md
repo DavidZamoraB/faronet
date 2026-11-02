@@ -11,7 +11,7 @@ perforada con headers para poder retirar el Nano.
 | [placa_perforada.md](placa_perforada.md) | Distribución en la placa, orden de soldadura, técnica y criterios de calidad |
 | [bitacora_pruebas.md](bitacora_pruebas.md) | Plantilla de pruebas con multímetro, calibración y medición de BER |
 | [calibrar_receptor.py](calibrar_receptor.py) | Prueba del umbral del receptor: alterna el LED IR propio y muestra A0 y el comparador |
-| `fotos/` | Fotos de ambas caras de la placa (pendiente) |
+| `fotos/` | Fotos de ambas caras de las dos placas (1 de noviembre de 2026) |
 | `kicad/` | Proyecto KiCad del esquemático (pendiente) |
 
 ## Flujo recomendado
