@@ -110,10 +110,17 @@ def duracion_us(n_bytes: int, bps: int) -> int:
 
 
 class DecodificadorManchester:
-    """Traduccion de DecodificadorManchester de firmware/faro/faro_core.cpp.
+    """Traduccion de DecodificadorManchester de firmware/faro/faro_core.cpp,
+    con correccion de ancho de pulso.
 
     Se alimenta con flancos (microsegundos desde el anterior, nivel despues
-    del flanco) y devuelve la trama completa cuando termina."""
+    del flanco) y devuelve la trama completa cuando termina.
+
+    Con poca luz el fototransistor tarda mas en apagarse que en encenderse:
+    los periodos con luz llegan mas largos y los oscuros mas cortos (en el
+    Faro 1 a 2000 bit/s: 615/385 us en vez de 500/500). El preambulo 0x55
+    tiene periodos de luz y de oscuridad iguales, asi que de el se mide ese
+    `sesgo` y se corrige en el resto de la trama."""
 
     CAZANDO, SINCRONIZADO, RECIBIENDO = range(3)
 
@@ -135,6 +142,9 @@ class DecodificadorManchester:
         self.bits_en_byte = 0
         self.buf = bytearray()
         self.esperados = 0
+        self.sesgo = 0.0           # us que la luz dura de mas (medido en el preambulo)
+        self._con_luz: list[int] = []
+        self._sin_luz: list[int] = []
 
     def clasificar(self, dt: int) -> int:
         """0 invalido, 1 corto (medio bit), 2 largo (bit completo); +-50%."""
@@ -146,24 +156,34 @@ class DecodificadorManchester:
         return 0
 
     def flanco(self, dt: int, nivel: int) -> Optional[bytes]:
-        clase = self.clasificar(dt)
-        if clase == 0:
-            if self.estado != self.CAZANDO:
-                self.reiniciar()
-            self.corrida_largos = 0
-            return None
+        con_luz = 1 - nivel  # el periodo que termino tenia el nivel contrario
         if self.estado == self.CAZANDO:
-            if clase == 2:
-                self.corrida_largos += 1
-                if self.corrida_largos >= LARGOS_PARA_SINCRONIZAR:
-                    self.estado = self.SINCRONIZADO
-                    self.registro = 0
-                    self.bits_sin_sfd = 0
-                    self.esperando_corto = False
-                    return self._bit(nivel)
-            else:
+            # En el preambulo todos los intervalos son de un bit completo; se
+            # acepta de 1 a 3 medios bits para tolerar el sesgo antes de medirlo.
+            h = self.medio
+            if not h <= dt < 3 * h:
                 self.corrida_largos = 0
+                self._con_luz.clear()
+                self._sin_luz.clear()
+                return None
+            (self._con_luz if con_luz else self._sin_luz).append(dt)
+            self.corrida_largos += 1
+            if self.corrida_largos < LARGOS_PARA_SINCRONIZAR:
+                return None
+            self._medir_sesgo()
+            self.estado = self.SINCRONIZADO
+            self.registro = 0
+            self.bits_sin_sfd = 0
+            self.esperando_corto = False
+            return self._bit(nivel)
+        clase = self.clasificar(round(dt - self.sesgo if con_luz else dt + self.sesgo))
+        if clase == 0:
+            self.reiniciar()
             return None
+        if self.estado == self.SINCRONIZADO and clase == 2:
+            # sigue el preambulo: mas muestras para promediar el sesgo
+            (self._con_luz if con_luz else self._sin_luz).append(dt)
+            self._medir_sesgo()
         if clase == 2:
             if self.esperando_corto:
                 self.reiniciar()
@@ -174,6 +194,16 @@ class DecodificadorManchester:
             return None
         self.esperando_corto = False
         return self._bit(nivel)
+
+    def _medir_sesgo(self) -> None:
+        luz, osc = self._con_luz[-16:], self._sin_luz[-16:]
+        if luz and osc:
+            sesgo = (sum(luz) / len(luz) - sum(osc) / len(osc)) / 2
+            # Con ruido aleatorio el promedio da un sesgo falso pequeno: solo se
+            # corrige uno claro (el del Faro 1 era 46 % de medio bit).
+            if abs(sesgo) < 0.2 * self.medio:
+                sesgo = 0.0
+            self.sesgo = max(-0.45 * self.medio, min(0.45 * self.medio, sesgo))
 
     def _bit(self, nivel: int) -> Optional[bytes]:
         if self.estado == self.SINCRONIZADO:
@@ -270,6 +300,9 @@ class FaroGPIO(FaroSimulado):
         self._ack_esperado: Optional[tuple[bytes, int]] = None
         self._recientes: list[tuple[bytes, int]] = []
         self._cola: "queue.Queue[Optional[bytes]]" = queue.Queue()
+        # Loopback: el Faro lee con su propio sensor lo que emite (reflejo).
+        self.loopback = False
+        self._eco: "queue.Queue[bytes]" = queue.Queue()
         self._activo = True
         self._preparar_pines()
         threading.Thread(target=self._procesador, name="faro-gpio-rx", daemon=True).start()
@@ -389,12 +422,12 @@ class FaroGPIO(FaroSimulado):
     def _flanco(self, gpio, nivel, tick) -> None:
         if nivel not in (0, 1):
             return  # watchdog de pigpio
-        if self._ignorar_hasta is not None:
+        if self._ignorar_hasta is not None and not self.loopback:
             if _transcurrido(tick, self._ignorar_hasta) > 0:
                 self._ultimo_tick = tick
                 return
             self._ignorar_hasta = None
-        if self._transmitiendo:
+        if self._transmitiendo and not self.loopback:
             self._ultimo_tick = tick
             return
         if self._ultimo_tick is None:
@@ -402,7 +435,9 @@ class FaroGPIO(FaroSimulado):
             return
         dt = _transcurrido(self._ultimo_tick, tick)
         self._ultimo_tick = tick
-        if self._decod.clasificar(dt):
+        # canal ocupado: intervalos con forma de Manchester (con margen para
+        # el retraso del sensor, igual que el preambulo en el decodificador)
+        if self._decod.medio // 2 <= dt < 3 * self._decod.medio:
             self._ultimo_valido = tick
         trama = self._decod.flanco(dt, nivel)
         if trama is not None:
@@ -419,6 +454,9 @@ class FaroGPIO(FaroSimulado):
                 pass
 
     def _procesar(self, trama: bytes) -> None:
+        if self.loopback:
+            self._eco.put(trama)  # se entrega tal cual, aunque el CRC este malo
+            return
         self.pi.write(self.p_led_rx, 1)
         try:
             valida = crc_valido(trama) and len(trama) == 14 + trama[1]
@@ -491,9 +529,10 @@ class FaroGPIO(FaroSimulado):
             finally:
                 self.pi.write(self.p_emisor, 0)
                 self.pi.write(self.p_led_tx, 0)
-                # el sensor ve el reflejo de su propio LED: se ignora un rato
-                self._ignorar_hasta = (self.pi.get_current_tick() + 4 * medio_bit_us(self.bps)) & _MASCARA
-                self._decod.reiniciar()
+                if not self.loopback:
+                    # el sensor ve el reflejo de su propio LED: se ignora un rato
+                    self._ignorar_hasta = (self.pi.get_current_tick() + 4 * medio_bit_us(self.bps)) & _MASCARA
+                    self._decod.reiniciar()
                 self._transmitiendo = False
 
     @staticmethod
@@ -526,3 +565,59 @@ class FaroGPIO(FaroSimulado):
             ventana = min(ventana * 2, VENTANA_MAXIMA)
         self.estad[3] += 1
         return E.TX_SIN_ACK, self.reintentos + 1
+
+
+# ---------------------------------------------------------------------- #
+# Prueba de loopback: un solo Faro, leyendo su propio reflejo
+# ---------------------------------------------------------------------- #
+def probar_loopback(faro: FaroGPIO, tramas: int = 50, tam: int = 100, espera_s: float = 0.5,
+                    al_avanzar=None) -> dict:
+    """Emite `tramas` tramas de `tam` bytes de carga aleatoria y compara lo que
+    lee el propio sensor. Devuelve conteos, BER y tasa efectiva.
+
+    BER = bits distintos / bits comparados, solo sobre las tramas que llegaron
+    completas (las perdidas se cuentan aparte)."""
+    from .trama import Trama
+
+    if not 0 < tam <= 114:
+        raise ValueError("tam debe estar entre 1 y 114 bytes")
+    faro.loopback = True
+    faro._decod.reiniciar()
+    while not faro._eco.empty():
+        faro._eco.get_nowait()
+    ok = crc_malo = perdidas = bits_err = bits_cmp = 0
+    inicio = time.monotonic()
+    try:
+        for i in range(tramas):
+            carga = os.urandom(tam)
+            esperada = Trama(destino=DIFUSION, origen=faro.direccion, carga=carga,
+                             seq=i & 0xFF).a_bytes()
+            faro._emitir(esperada)
+            try:
+                recibida = faro._eco.get(timeout=espera_s)
+            except queue.Empty:
+                recibida = None
+            if recibida is None or len(recibida) != len(esperada):
+                perdidas += 1
+            else:
+                errores = sum(bin(a ^ b).count("1") for a, b in zip(recibida, esperada))
+                bits_err += errores
+                bits_cmp += 8 * len(esperada)
+                if errores == 0:
+                    ok += 1
+                else:
+                    crc_malo += 1
+            if al_avanzar:
+                al_avanzar(i + 1, ok, crc_malo, perdidas)
+    finally:
+        faro.loopback = False
+        faro._decod.reiniciar()
+    segundos = time.monotonic() - inicio
+    return {
+        "tramas": tramas, "ok": ok, "con_errores": crc_malo, "perdidas": perdidas,
+        "bits_erroneos": bits_err, "bits_comparados": bits_cmp,
+        "ber": (bits_err / bits_cmp) if bits_cmp else None,
+        "segundos": segundos,
+        "tasa_efectiva_bps": ok * tam * 8 / segundos if segundos else 0.0,
+        "bps": faro.bps,
+    }
