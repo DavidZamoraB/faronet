@@ -105,10 +105,11 @@ Tabla de contenido
 
 1.2.  Terminologia
 
-   Faro:  Dispositivo de transmision por luz.  Un microcontrolador
-      (Arduino) con un emisor IR de 940 nm, un receptor con
-      fototransistor y comparador, LEDs de estado y un boton de panico,
-      conectado por USB a un nodo.
+   Faro:  Dispositivo de transmision por luz: un emisor IR de 940 nm,
+      un receptor con fototransistor y comparador, LEDs de estado y un
+      boton de panico.  Lo controla una Raspberry Pi por sus pines GPIO
+      (implementacion de referencia) o un microcontrolador (Arduino)
+      conectado por USB al nodo.
 
    Nodo:  Programa FaroNet que corre en una computadora.  Todo nodo es
       rele; algunos ademas son gateway.
@@ -136,13 +137,13 @@ Tabla de contenido
 1.3.  Arquitectura
 
      Comunidad A                                 Comunidad B
-   +----------+   TCP   +--------+  USB  +------+          +------+
-   | Nodo PC  |---------| Nodo   |-------|Faro A| ~~ luz ~~|Faro B|
-   | (cliente)|         | (rele) |       +------+          +------+
-   +----------+         +--------+                             | USB
-                                                        +------------+
-                                                        | Gateway    |
-                                                        | (Raspberry)|
+   +----------+   TCP   +---------+ GPIO  +------+          +------+
+   | Nodo PC  |---------| Nodo    |-------|Faro A| ~~ luz ~~|Faro B|
+   | (cliente)|         | (rele)  |       +------+          +------+
+   +----------+         |Raspberry|                            | GPIO
+                        |    A    |                     +------------+
+                        +---------+                     | Gateway    |
+                                                        | Raspberry B|
                                                         +------------+
                                                               | HTTPS
                                                               v
@@ -186,8 +187,8 @@ Tabla de contenido
    Se eligio Manchester sobre OOK simple porque:
 
    o  Es autosincronizante: siempre hay un flanco a mitad de bit, asi
-      que el receptor corrige el desfase entre los relojes de dos
-      Arduinos.  El decodificador tolera un error de +/-50% en cada
+      que el receptor corrige el desfase entre los relojes de los dos
+      Faros.  El decodificador tolera un error de +/-50% en cada
       intervalo.
 
    o  Tiene balance de continua: la mitad del tiempo hay luz, lo que
@@ -263,7 +264,9 @@ Tabla de contenido
 
 2.4.  Direcciones fisicas
 
-   Una direccion fisica mide 4 bytes y se guarda en la EEPROM del Faro.
+   Una direccion fisica mide 4 bytes y se guarda en la memoria no
+   volatil del Faro (un archivo en la tarjeta SD de la Raspberry Pi, o
+   la EEPROM del Arduino).
    00:00:00:00 y FF:FF:FF:FF NO DEBEN usarse como direccion propia.
 
    Las direcciones son rotables.  El nodo DEBERIA generar una nueva
@@ -322,8 +325,18 @@ Tabla de contenido
 
 3.  Interfaz nodo-Faro (DispositivoLuzAdaptador)
 
-   El Faro se comunica con el nodo por USB-serial a 115200 baudios,
-   8N1.  Cada paquete es:
+   Cuando el Faro lo controla una Raspberry Pi, la Capa 1 corre en la
+   misma Raspberry que el nodo (adaptador/dispositivo_luz_adaptador/
+   faro_gpio.py) y este protocolo se usa dentro del proceso, sin USB.
+   Los tiempos los maneja pigpio: cada trama sale como forma de onda por
+   DMA y cada flanco del receptor llega con su marca de tiempo en
+   microsegundos, asi que la latencia del sistema operativo no afecta
+   la decodificacion.  La salida del comparador DEBE bajarse a 3,3 V
+   (por ejemplo con un divisor resistivo) antes de entrar a la
+   Raspberry.
+
+   Con un Arduino, el Faro se comunica con el nodo por USB-serial a
+   115200 baudios, 8N1.  Cada paquete es:
 
       COBS( TIPO (1) | DATOS | CRC-16 (2) ) || 0x00
 
@@ -366,8 +379,9 @@ Tabla de contenido
    protocolo de Capa 1 y el tamano maximo de trama, de modo que el nodo
    DEBE verificar la compatibilidad antes de usar el Faro.
 
-   GUARDAR_SECRETO almacena en la EEPROM la semilla de identidad del
-   nodo (Seccion 4.1).  El boton de panico la borra (Seccion 9).
+   GUARDAR_SECRETO almacena en la memoria no volatil del Faro la
+   semilla de identidad del nodo (Seccion 4.1).  El boton de panico la
+   borra (Seccion 9).
 
 
 4.  FaroNet: capas 2 y 3
@@ -384,7 +398,8 @@ Tabla de contenido
 
    El ID de nodo es un hash BLAKE2b de 8 bytes de la llave publica de
    firma.  La semilla PUEDE guardarse en un archivo (opcion --llave) o
-   en la EEPROM del Faro, donde el boton de panico la borra.
+   en la memoria no volatil del Faro, donde el boton de panico la
+   borra.
 
    Toda la criptografia usa libsodium a traves de PyNaCl en los nodos y
    WebCrypto en el Worker.  FaroNet NO DEFINE primitivas propias.
@@ -817,7 +832,7 @@ Tabla de contenido
          ni User-Agent; la clave del limite de peticiones es un hash.
 
    Ladron del Faro:
-      V: la EEPROM y la memoria del Faro.
+      V: la memoria no volatil del Faro (EEPROM o tarjeta SD).
       N: las llaves y la identidad, si se activo el panico.
       M: boton de panico que borra el secreto y cambia la direccion.
 
@@ -878,13 +893,14 @@ Tabla de contenido
       dejando de publicarlo: la entrada vence en 10 minutos.
 
    Boton de panico:  Al presionarlo, el Faro DEBE sobrescribir el
-      secreto de la EEPROM (primero con 0xFF y luego con 0x00), generar
-      una direccion fisica nueva, borrar los buffers, las estadisticas
-      y la tabla de duplicados, enviar el evento PANICO e indicarlo
-      visualmente (los LEDs parpadean y el LED rojo queda encendido).
-      El nodo, al recibirlo (o con el comando "panico" de la consola),
-      DEBE borrar sus llaves, circuitos, rutas,
-      directorio y buzon, y detenerse.
+      secreto guardado (en el Arduino, la EEPROM con 0xFF y luego con
+      0x00; en la Raspberry, el archivo con ceros antes de borrarlo),
+      generar una direccion fisica nueva, borrar los buffers, las
+      estadisticas y la tabla de duplicados, enviar el evento PANICO e
+      indicarlo visualmente (los LEDs parpadean y el LED rojo queda
+      encendido).  El nodo, al recibirlo (o con el comando "panico" de
+      la consola), DEBE borrar sus llaves, circuitos, rutas, directorio
+      y buzon, y detenerse.
 
    Riesgo que se acepta: el proveedor del edge sigue viendo los
    metadatos de red (IP, hora, tamano y ruta de cada peticion) aunque
@@ -927,13 +943,17 @@ Tabla de contenido
       de la lista y volver a desplegar.
 
    Secreto del Faro:  LEER_SECRETO entrega la semilla a quien tenga
-      acceso al puerto USB.  Se asume que el nodo conectado es de
-      confianza.  El secreto protege contra el robo del Faro despues de
-      presionar el panico, no antes.  La direccion que el Faro genera
-      tras un panico usa un generador no criptografico (xorshift con
-      semilla de ruido analogico), suficiente para romper la asociacion
-      con la direccion anterior; las rotaciones normales las hace el
-      nodo con un generador criptografico.
+      acceso al puerto USB del Arduino o a la Raspberry.  Se asume que
+      el nodo es de confianza.  En una tarjeta SD, sobrescribir un
+      archivo no garantiza borrar todas sus copias fisicas (la tarjeta
+      reubica los bloques), asi que en la Raspberry el panico reduce,
+      pero no elimina, el riesgo de recuperar el secreto.  El secreto
+      protege contra el robo del Faro despues de presionar el panico, no
+      antes.  La direccion que el Arduino genera tras un panico usa un
+      generador no criptografico (xorshift con semilla de ruido
+      analogico), suficiente para romper la asociacion con la direccion
+      anterior; las rotaciones normales, y todas las direcciones en la
+      Raspberry, usan un generador criptografico.
 
    Abuso del edge:  El limite de 60 peticiones por minuto, el tamano
       maximo de los mensajes, la cantidad maxima de blobs del buzon y
