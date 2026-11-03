@@ -14,7 +14,7 @@ import unittest
 from dispositivo_luz_adaptador import DispositivoLuzAdaptador
 from dispositivo_luz_adaptador import enlace as E
 from dispositivo_luz_adaptador.faro_gpio import (DecodificadorManchester, FaroGPIO, PINES_DEFECTO,
-                                                 parsear_puerto, pulsos_manchester)
+                                                 parsear_puerto, probar_loopback, pulsos_manchester)
 from dispositivo_luz_adaptador.trama import Trama
 
 MASCARA = 0xFFFFFFFF
@@ -28,12 +28,13 @@ class Aire:
     def __init__(self):
         self.pis = []
         self.descartar = None  # funcion(origen, edges) -> True para perder la transmision
+        self.eco = False       # True: cada Raspberry tambien ve su propio LED (reflejo)
 
     def transmitir(self, origen, flancos):
         if self.descartar and self.descartar(origen, flancos):
             return
         for pi in self.pis:
-            if pi is not origen:
+            if pi is not origen or self.eco:
                 threading.Thread(target=pi.recibir_luz, args=(flancos,), daemon=True).start()
 
 
@@ -83,7 +84,9 @@ class PiFalsa:
     def wave_send_once(self, wid):
         t0 = time.monotonic()
         t, nivel, flancos = 0, self.niveles.get(self.emisor, 0), []
-        for encender, apagar, us in self.pulsos:
+        for p in self.pulsos:
+            # FaroGPIO usa pigpio.pulse si pigpio esta instalado, o una tupla si no
+            encender, apagar, us = (p.gpio_on, p.gpio_off, p.delay) if hasattr(p, "gpio_on") else p
             nuevo = 1 if encender & (1 << self.emisor) else 0 if apagar & (1 << self.emisor) else nivel
             if nuevo != nivel:
                 flancos.append((t, nuevo))
@@ -143,6 +146,19 @@ class TestCodigo(unittest.TestCase):
             self.assertEqual(self.flancos(trama, bps), trama)
             self.assertEqual(self.flancos(trama, bps, jitter=0.25), trama)
             self.assertEqual(self.flancos(trama, bps, invertir=True), trama)
+
+    def test_corrige_luz_que_dura_de_mas(self):
+        """El sensor del Faro 1 alargaba la luz 115 us a 2000 bit/s (615/385)."""
+        trama = Trama(destino=b"\x01\x02\x03\x04", origen=b"\x0a\x0b\x0c\x0d",
+                      carga=bytes(range(80)), seq=3).a_bytes()
+        for bps, sesgo in ((2000, 115), (2000, -100), (10000, 20), (20000, 10)):
+            dec = DecodificadorManchester(bps)
+            salida, previo = None, 0
+            for nivel, us in pulsos_manchester(trama, bps):
+                dt = us + sesgo if previo == 1 else us - sesgo
+                salida = salida or dec.flanco(dt if previo != nivel else 10_000, nivel)
+                previo = nivel
+            self.assertEqual(salida, trama, (bps, sesgo))
 
     def test_pulsos_terminan_apagados(self):
         pulsos = pulsos_manchester(b"\xff" * 14, 2000)
@@ -225,6 +241,32 @@ class TestFaroGPIO(unittest.TestCase):
         nueva = a.rotar_direccion()
         faro = FaroGPIO(pi=PiFalsa(Aire()), archivo=os.path.join(self.dir.name, "f0.json"))
         self.assertEqual(faro.direccion, nueva)
+
+
+class TestLoopback(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.aire = Aire()
+        self.aire.eco = True
+        self.faro = FaroGPIO(pi=PiFalsa(self.aire), bps=5000,
+                             archivo=os.path.join(self.dir.name, "f.json"))
+
+    def tearDown(self):
+        self.faro.close()
+        self.dir.cleanup()
+
+    def test_loopback_con_reflejo(self):
+        r = probar_loopback(self.faro, tramas=5, tam=60)
+        self.assertEqual((r["ok"], r["perdidas"], r["con_errores"]), (5, 0, 0))
+        self.assertEqual(r["ber"], 0.0)
+        self.assertGreater(r["tasa_efectiva_bps"], 0)
+        self.assertFalse(self.faro.loopback)  # vuelve al modo normal
+
+    def test_sin_reflejo_se_pierden(self):
+        self.aire.eco = False
+        r = probar_loopback(self.faro, tramas=2, tam=20, espera_s=0.2)
+        self.assertEqual((r["ok"], r["perdidas"]), (0, 2))
+        self.assertIsNone(r["ber"])
 
 
 if __name__ == "__main__":
