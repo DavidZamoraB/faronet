@@ -119,7 +119,12 @@ class DispositivoLuzAdaptador:
     # Conexion
     # ------------------------------------------------------------------ #
     def abrir(self) -> "DispositivoLuzAdaptador":
-        if isinstance(self._puerto_nombre, str):
+        if isinstance(self._puerto_nombre, str) and self._puerto_nombre.startswith("gpio"):
+            # Faro manejado por los pines de una Raspberry Pi (faro_gpio.py)
+            from .faro_gpio import FaroGPIO
+
+            self._serial = FaroGPIO.desde_texto(self._puerto_nombre)
+        elif isinstance(self._puerto_nombre, str):
             import serial  # pyserial
 
             self._serial = serial.Serial(self._puerto_nombre, self._baudios, timeout=0.05)

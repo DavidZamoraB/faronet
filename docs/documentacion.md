@@ -89,9 +89,10 @@ programó y probó sin tener los Faros soldados.
 |---|---|
 | Sistemas operativos | GNU/Linux (Ubuntu) en las PC; Raspberry Pi OS en los nodos Raspberry Pi |
 | Editor | Visual Studio Code |
-| Firmware del Faro | Arduino (C/C++), Arduino IDE y `arduino-cli` con el core `arduino:avr` |
+| Control del Faro | Raspberry Pi por GPIO con `pigpio` (`adaptador/dispositivo_luz_adaptador/faro_gpio.py`), una Raspberry por Faro |
+| Firmware alternativo | Arduino (C/C++) y `arduino-cli` con el core `arduino:avr`; se usó en el prototipo en protoboard |
 | Pruebas del núcleo del firmware | `g++ -std=c++11` en la PC (`firmware/faro/test/test_core.cpp`) |
-| Biblioteca, nodos y gateway | Python 3.12, `pyserial`, PyNaCl (libsodium), Scapy (opcional) |
+| Biblioteca, nodos y gateway | Python 3.12, `pyserial`, `pigpio`, PyNaCl (libsodium), Scapy (opcional) |
 | Aplicación en el edge | TypeScript sobre Cloudflare Workers (plan gratuito), Durable Objects con SQLite, `wrangler`, Node.js 22 |
 | Integración continua | GitHub Actions (`.github/workflows/ci.yml`) |
 | Control de versiones | Git y GitHub, una rama por funcionalidad y pull requests |
@@ -100,8 +101,9 @@ programó y probó sin tener los Faros soldados.
 
 ## Hardware y herramientas físicas
 
-* Arduino Uno R3 (clon, ATmega328P DIP) y Arduino Nano; el firmware compila
-  para ambos.
+* Una **Raspberry Pi por Faro**, que lo maneja por sus pines GPIO. El Arduino
+  Uno se usó en el prototipo en protoboard; el firmware sigue en el
+  repositorio como alternativa (compila para Uno y Nano).
 * Raspberry Pi 2 y Raspberry Pi 3/4 como nodos (`faronet-sur` de David y
   `faronet-gw` de Diego).
 * Cautín, estaño con resina, malla desoldante, pinzas y soporte.
@@ -145,38 +147,61 @@ RFC (`docs/rfc-faronet.txt`, anexo al final de este PDF).
 
 ## 3.1 Hardware: el Faro
 
-El Faro es un Arduino (Uno o Nano) con cinco bloques:
+El Faro tiene cinco bloques y un conector J1 de 9 pines. Lo maneja una
+**Raspberry Pi por GPIO** (una Raspberry por Faro), que hace el trabajo que en
+el diseño original hacía un Arduino:
 
 ```
-                +----------------------------------------------+
-   USB (nodo) ==|  Arduino Uno / Nano                          |
-                |  D4 ----> [ Emisor: 2N2222A + LED IR ]  ~~~> luz
-   luz ~~~>  [ Receptor: fototransistor -> LM393 ] ----> D2    |
-                |              \--------------------> A0      |
-                |  D5 -> LED TX    D6 -> LED RX    D7 -> LED   |
-                |  D3 <- botón de pánico                       |
-                +----------------------------------------------+
+                +-----------------------------------------------+
+  Raspberry Pi =| J1 (9 pines) + cables dupont                  |
+                |  GPIO17 --> [ Emisor: 2N2222A + LED IR ]  ~~~> luz
+   luz ~~~>  [ Receptor: fototransistor -> LM393 ] -> divisor -> GPIO27
+                |  GPIO5 -> LED TX   GPIO6 -> LED RX   GPIO13 -> LED
+                |  GPIO22 <- boton de panico                     |
+                +-----------------------------------------------+
 ```
 
-| Pin | Función |
-|---|---|
-| D2 | Salida del comparador (interrupción INT0) |
-| D3 | Botón de pánico a GND (pull-up interno) |
-| D4 | Base del 2N2222A que maneja el LED IR (vía R2 = 1 kΩ) |
-| D5 / D6 / D7 | LED TX (verde) / LED RX (amarillo) / LED estado-pánico (rojo) |
-| A0 | Voltaje del fototransistor (solo calibración) |
+| J1 | Raspberry (BCM / pin físico) | Arduino (alternativa) | Función |
+|---|---|---|---|
+| B6 | 5 V / pin 2 | 5V | Alimentación |
+| B7 | GND / pin 6 | GND | Tierra |
+| B8 | GPIO27 / pin 13, **por un divisor 10 kΩ / 20 kΩ** | D2 | Salida del comparador |
+| B9 | no se conecta | A0 | Voltaje del sensor (solo calibración) |
+| B10 | GPIO17 / pin 11 | D4 | Base del 2N2222A (vía R2 = 1 kΩ) |
+| B11 | GPIO22 / pin 15 | D3 | Botón de pánico a GND (pull-up interno) |
+| B12 / B13 / B14 | GPIO5, GPIO6, GPIO13 / pines 29, 31, 33 | D5, D6, D7 | LED TX (verde) / RX (azul) / estado-pánico (rojo) |
 
-**Emisor.** LED IR de 940 nm con R1 = 82 Ω y un 2N2222A como interruptor.
-Corriente del LED ≈ (5 − 1,2 − 0,2) V / 82 Ω ≈ 44 mA; corriente de base
-≈ 4,3 mA, β forzado ≈ 10, así que el transistor satura. Se usa transistor
-porque un pin del ATmega328P no debe dar 44 mA.
+**Por qué Raspberry y no Arduino.** El equipo decidió usar las Raspberry Pi
+como controladores de los Faros (el enunciado lo permite: "SBC ... conexión
+por GPIO en el caso de una Raspberry Pi") y desechar el Arduino. La capa 1 no
+cambia: `faro_gpio.py` implementa la misma codificación Manchester, CSMA/CA
+con ACK, CRC, dirección rotable y pánico que el firmware, y habla con el resto
+del software con el mismo protocolo, así que el nodo y el gateway no cambian
+(`faronet --faro gpio`). Los tiempos los maneja **pigpio**: cada trama sale
+como forma de onda por DMA y cada flanco del receptor llega con su marca de
+tiempo en microsegundos, de modo que la latencia de Linux no afecta la
+decodificación. Verificado en la Raspberry Pi 2: una trama de 114 bytes tarda
+0,53 s a 2000 bit/s, lo esperado. La dirección física y el secreto se guardan
+en un archivo de la SD (permisos 0600) que el pánico sobrescribe y borra.
+
+**Niveles de 3,3 V.** Los pines de la Raspberry no toleran 5 V. La salida del
+LM393 sube a 5 V por R5, por eso pasa por un divisor (10 kΩ en serie y 20 kΩ
+a tierra, ≈ 2,5 V en alto) antes de GPIO27. La Raspberry no tiene entrada
+analógica, así que A0 no se usa. Los LEDs a 3,3 V brillan menos; el azul
+(Vf ≈ 3 V) casi no se ve.
+
+**Emisor.** LED IR de 940 nm con R1 = 82 Ω (100 Ω en el Faro 1) y un 2N2222A
+como interruptor. Corriente del LED ≈ (5 − 1,2 − 0,2) V / 100 Ω ≈ 36 mA;
+corriente de base desde un pin de 3,3 V ≈ (3,3 − 0,7) V / 1 kΩ ≈ 2,6 mA, β
+forzado ≈ 14, así que el transistor satura. Se usa transistor porque un pin
+GPIO no debe dar más de unos 16 mA.
 
 **Receptor.** Fototransistor IR (con R3 a GND) cuyo voltaje entra a un
 comparador LM393. El umbral es un **divisor fijo** R9 = 10 kΩ / R10 = 1 kΩ
 (≈ 0,45 V). R4 = 1,5 MΩ da histéresis y R5 = 10 kΩ es el pull-up de la salida
 de colector abierto. Se usa comparador y no solo la entrada analógica porque
-`analogRead` tarda ≈ 100 µs, demasiado para Manchester a varios kbit/s; el
-comparador entrega flancos limpios a la interrupción de D2.
+leer un voltaje analógico es lento (y la Raspberry no tiene ADC); el
+comparador entrega flancos limpios que pigpio marca con su tiempo.
 
 **Cambios que dejó la práctica** (detalle en `hardware/bom.md`):
 
@@ -185,6 +210,10 @@ comparador entrega flancos limpios a la interrupción de D2.
 | Umbral | Trimpot RV1 10 kΩ | Divisor fijo R9/R10 | El trimpot del kit no variaba el voltaje |
 | R4 | 1 MΩ | 1,5 MΩ | Disponibilidad; funciona igual |
 | R5 | 4,7 kΩ | 10 kΩ | Disponibilidad; sirve como pull-up |
+| R1 (Faro 1) | 82 Ω | 100 Ω | No había de 82 Ω; ≈ 36 mA en vez de 44 mA |
+| C1 (Faro 1) | 100 nF | 10 nF | No había de 100 nF; sigue filtrando el 5 V del chip |
+| Controlador | Arduino Uno/Nano | Raspberry Pi por GPIO | Decisión del equipo; una Raspberry por Faro |
+| Salida D2 | Directa al Arduino | Divisor 10 kΩ / 20 kΩ | Los pines de la Raspberry son de 3,3 V |
 
 El Faro de Diego funcionó en protoboard el 20-10-2026 (A0 ≈ 55 con el LED
 apagado y ≈ 272 encendido). El de David pasó la prueba de recepción el
@@ -197,14 +226,20 @@ KiCad están en `hardware/esquematico.md`. **[PENDIENTE]** el proyecto KiCad en
 `hardware/kicad/` y su exportación en PDF.
 
 **Placa perforada.** El circuito se suelda en placa perforada con zócalo
-DIP-8 para el LM393 y headers hembra para retirar el Arduino sin desoldar
+DIP-8 para el LM393 y un conector J1 de 9 pines macho: la Raspberry se
+conecta con cables dupont hembra-hembra y se retira sin desoldar
 (`hardware/placa_perforada.md`). Se soldaron dos Faros en placas HS-03
 (9 × 14,5 cm). Las fotos de ambas caras están en `hardware/fotos/` y se
 muestran abajo (tomadas el 1 de noviembre de 2026).
 
-* **Faro 1**: tiene montados el header para el Arduino, C2, el LM393 en su
-  zócalo, C1, las resistencias del emisor y del receptor, el 2N2222A, el LED
-  IR y el receptor, el botón de pánico y los LEDs indicadores.
+* **Faro 1**: todo soldado y probado por partes con la Raspberry como fuente
+  de 5 V: LEDs, emisor (el LED IR se ve en la cámara del celular), receptor
+  con el LM393 (detecta el IR reflejado y deja de detectarlo al apagar el
+  emisor), botón de pánico y conector J1 con 5 V y tierra. El LM393 va con la
+  pata 7 doblada hacia afuera: esa salida no se usa y su punto quedó unido al
+  5 V. Se están soldando los cables de J1 a cada señal. La distribución real
+  está en `hardware/placa/placa.py` y el diseño limpio para el Faro 2 en
+  `placa2.py` (ambos verifican conexiones y cortos).
 * **Faro 2** (David): terminadas y probadas con multímetro las etapas de
   alimentación (3A: rieles de 5 V y tierra, sin corto) y divisor de umbral
   (3B); en la foto ya están el zócalo DIP-8 (todavía sin el LM393), C1, las
@@ -230,7 +265,7 @@ reemplazar por los de la factura).
 
 | Decisión | Elección | Por qué |
 |---|---|---|
-| Codificación de línea | OOK con **Manchester** (IEEE 802.3) | Auto-sincronizante (corrige el desfase de reloj entre Arduinos en cada bit), nivel promedio constante (umbral estable) y detecta errores de línea antes del CRC. Cuesta el doble de ancho de banda. |
+| Codificación de línea | OOK con **Manchester** (IEEE 802.3) | Auto-sincronizante (corrige el desfase de reloj entre los dos Faros en cada bit), nivel promedio constante (umbral estable) y detecta errores de línea antes del CRC. Cuesta el doble de ancho de banda. |
 | Velocidad | 500–20 000 bit/s, 2 000 por defecto | Ajustable para buscar el máximo a cada distancia |
 | Sincronización | Preámbulo 4 × `0x55` + SFD `0xD5` | Si llega el patrón negado, el receptor invierte los bits: la polaridad del hardware no importa |
 | Trama | 12 B de cabecera + 0–114 B de carga + CRC-16 = máx. 128 B | Cumple el límite del enunciado |
@@ -393,6 +428,7 @@ del Faro antes del pánico.
 | `ResultadoTx`, `TramaRecibida`, `InfoFaro`, `Estadisticas` | Resultados tipados de cada comando |
 | `medicion.py` | `emisor()` y `receptor()` para medir tasa efectiva y BER; `guardar_csv()` |
 | `simulador.py` | `MedioSimulado(ber)` y `FaroSimulado`: imitan el firmware para probar sin hardware |
+| `faro_gpio.py` | `FaroGPIO`: el Faro manejado por una Raspberry Pi (hereda los comandos de `FaroSimulado` y cambia el medio por luz real con pigpio); `DecodificadorManchester` (traducción del del firmware), `pulsos_manchester`, CSMA/CA, ACK, duplicados, pánico por botón y memoria en archivo |
 | `scapy_faro.FaroTrama` | Capa Scapy de la trama, con CRC calculado en `post_build` |
 
 ## 4.3 Nodo de la mesh (`nodo/faronet/`)
@@ -431,7 +467,22 @@ del Faro antes del pánico.
 
 # 5. Instrucciones para ejecutar
 
-## 5.1 Compilar y flashear el Faro
+## 5.1 Preparar el Faro
+
+Con una **Raspberry Pi** (lo que se usa en los Faros):
+
+```bash
+sudo apt install pigpio python3-pigpio
+sudo systemctl enable --now pigpiod             # demonio de tiempos precisos
+pip install -e "adaptador[gpio]" -e nodo -e gateway
+faro -p gpio info                               # pines por defecto: gpio:17,27,22,5,6,13
+```
+
+Las conexiones están en la sección 3.1. El puerto `gpio` acepta otros pines
+(`gpio:EMISOR,RECEPTOR,BOTON,LED_TX,LED_RX,LED_ESTADO`) y un pigpiod remoto
+(`gpio@raspberry.local`).
+
+Alternativa con **Arduino** (firmware de `firmware/faro/`):
 
 ```bash
 arduino-cli core install arduino:avr
@@ -460,7 +511,11 @@ pip install -e adaptador -e nodo -e gateway      # desde la raíz del repositori
 
 ## 5.3 Probar el Faro
 
+Con la Raspberry el puerto es `gpio`; con Arduino, el puerto serial:
+
 ```bash
+faro -p gpio info
+faro -p gpio enviar a1:b2:c3:d4 "hola"
 faro -p /dev/ttyACM0 info
 faro -p /dev/ttyACM0 sondear --continuo           # A0 y comparador
 faro -p /dev/ttyACM0 enviar a1:b2:c3:d4 "hola"
@@ -482,8 +537,9 @@ el puerto el Uno se reinicia.
 # Nodo con identidad en archivo, escuchando y conectado a un vecino
 faronet --llave ana.key --nombre ana --escuchar 0.0.0.0:9101 --vecino 192.168.1.20:9101
 
-# Nodo con Faro: la identidad vive en la EEPROM y el pánico la borra
-faronet --faro /dev/ttyACM0 --nombre puente-sur --escuchar 0.0.0.0:9101
+# Nodo con Faro: la identidad vive en la memoria del Faro y el pánico la borra
+faronet --faro gpio --nombre puente-sur --escuchar 0.0.0.0:9101          # Raspberry
+faronet --faro /dev/ttyACM0 --nombre puente-sur --escuchar 0.0.0.0:9101  # Arduino
 
 # Gateway conectado al Worker
 faronet --llave gw.key --nombre gw-norte --gateway \
@@ -569,10 +625,11 @@ las sesiones de trabajo registradas; las horas están en blanco a propósito.
 
 | Componente | Estado al 2 de noviembre de 2026 |
 |---|---|
-| Firmware del Faro | Completo; compila para Nano y Uno; núcleo probado en la PC |
-| Biblioteca DispositivoLuzAdaptador | Completa, con simulador, Scapy y comandos de medición; 22 pruebas pasan |
+| Faro por Raspberry Pi (GPIO) | Completo; 8 pruebas con una Raspberry falsa; probado en la Raspberry Pi 2 (114 B en 0,53 s a 2000 bit/s) |
+| Firmware Arduino (alternativa) | Completo; compila para Nano y Uno; núcleo probado en la PC |
+| Biblioteca DispositivoLuzAdaptador | Completa, con simulador, Faro por GPIO, Scapy y comandos de medición; 30 pruebas pasan |
 | Faro en protoboard | Funciona por separado en ambos Faros (recepción con LED propio y hoja / frente a frente) |
-| Faro soldado | Dos placas soldadas parcialmente (fotos en la sección 3.1); el Faro 2 no tiene todavía el emisor |
+| Faro soldado | Faro 1 soldado y probado por partes (faltan cables de J1); Faro 2 sin el emisor todavía (fotos en la sección 3.1) |
 | Prueba Faro contra Faro | **No realizada** |
 | Tasa efectiva y BER a 3 distancias | **No realizada**. El procedimiento (Apéndice B del RFC) y la herramienta (`faro medir`) están listos, pero no hay resultados |
 | Esquemático KiCad, bitácora de multímetro | **[PENDIENTE]** (esquemático y netlist en Markdown sí existen; las fotos ya están) |
@@ -591,6 +648,9 @@ las sesiones de trabajo registradas; las horas están en blanco a propósito.
   solo se probó con Faros simulados (pruebas de `nodo/`) y no se compite por
   el extra de mayor tasa de transferencia.
 
+* Se reemplazó el Arduino por una Raspberry Pi por Faro. Eso obligó a
+  reimplementar la capa 1 en la Raspberry (`faro_gpio.py`) y a bajar a
+  3,3 V la salida del comparador con un divisor.
 * El trimpot del kit no variaba el voltaje: se reemplazó por un divisor fijo.
 * El sensor del Faro de David es débil (probablemente un fotodiodo y no un
   fototransistor): el margen entre luz y oscuridad es justo para 1–2 m.
@@ -650,16 +710,16 @@ Antes de entregar se debe regenerar esta tabla con el historial final.
 
 ## 7.5 Autoevaluación de aprendizaje
 
-**[PENDIENTE]** Escala [1] Muy malo, [2] Malo, [3] Regular, [4] Bueno, [5] Muy bueno.
+Escala [1] Muy malo, [2] Malo, [3] Regular, [4] Bueno, [5] Muy bueno.
 
 | Rubro | David | Diego |
 |---|---|---|
-| Aprendizaje de soldadura y hardware | | |
-| Aprendizaje de la capa física | | |
-| Aprendizaje de enrutamiento en redes mesh | | |
-| Aprendizaje de privacidad y anonimato | | |
-| Aprendizaje de serverless en el edge | | |
-| Aprendizaje de redacción de RFCs | | |
+| Aprendizaje de soldadura y hardware | 5 | 5 |
+| Aprendizaje de la capa física | 5 | 5 |
+| Aprendizaje de enrutamiento en redes mesh | 5 | 5 |
+| Aprendizaje de privacidad y anonimato | 5 | 5 |
+| Aprendizaje de serverless en el edge | 5 | 5 |
+| Aprendizaje de redacción de RFCs | 5 | 5 |
 
 # 8. Lecciones aprendidas
 

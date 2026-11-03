@@ -41,7 +41,7 @@ def _argumentos(argv=None) -> argparse.Namespace:
     p = argparse.ArgumentParser(prog="faronet", description="Nodo de la mesh anonima FaroNet")
     p.add_argument("--llave", help="archivo con la semilla de 32 bytes (se crea si no existe)")
     p.add_argument("--faro", action="append", default=[], metavar="PUERTO",
-                   help="puerto serial de un Faro (repetible); sin --llave, la identidad "
+                   help="puerto serial de un Faro, o \"gpio\" si lo maneja esta Raspberry (repetible); sin --llave, la identidad "
                         "se guarda en el Faro y el boton de panico la borra")
     p.add_argument("--bps", type=int, help="velocidad de los Faros (ambos extremos iguales)")
     p.add_argument("--rotar-direccion", type=float, default=600, metavar="SEG",
