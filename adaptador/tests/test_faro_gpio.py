@@ -84,7 +84,9 @@ class PiFalsa:
     def wave_send_once(self, wid):
         t0 = time.monotonic()
         t, nivel, flancos = 0, self.niveles.get(self.emisor, 0), []
-        for encender, apagar, us in self.pulsos:
+        for p in self.pulsos:
+            # FaroGPIO usa pigpio.pulse si pigpio esta instalado, o una tupla si no
+            encender, apagar, us = (p.gpio_on, p.gpio_off, p.delay) if hasattr(p, "gpio_on") else p
             nuevo = 1 if encender & (1 << self.emisor) else 0 if apagar & (1 << self.emisor) else nivel
             if nuevo != nivel:
                 flancos.append((t, nuevo))
